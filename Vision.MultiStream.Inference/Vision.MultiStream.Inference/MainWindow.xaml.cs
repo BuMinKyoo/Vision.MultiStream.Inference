@@ -1,0 +1,94 @@
+using System;
+using System.IO;
+using System.Windows;
+using Vision.MultiStream.Inference.Services.Rtsp;
+using Vision.MultiStream.Inference.Services.Snapshot;
+using Vision.MultiStream.Inference.Services.Yolo;
+using Vision.MultiStream.Inference.ViewModels;
+
+namespace Vision.MultiStream.Inference
+{
+    /// <summary>
+    /// Interaction logic for MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow : Window
+    {
+        private readonly YoloInferenceEngine? _cpuEngine;
+        private readonly YoloInferenceEngine? _dmlEngine;
+        private readonly YoloInferenceEngine? _gpuEngine;
+        private SnapshotViewModel? _snapshotVm;
+        private RtspViewModel? _rtspVm;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+
+            string modelPath = Path.Combine(
+                AppContext.BaseDirectory, "Assets", "Models", "yolov8n.onnx");
+
+            if (!File.Exists(modelPath))
+            {
+                MessageBox.Show(
+                    "ONNX 모델 파일을 찾을 수 없습니다.\n\n경로: " + modelPath +
+                    "\n\nyolov8n.onnx 를 해당 경로에 배치하거나 빌드 후 다시 실행하세요.",
+                    "모델 누락",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
+
+            try
+            {
+                _cpuEngine = new YoloInferenceEngine(modelPath, InferenceDevice.Cpu);
+
+                // DirectML/CUDA 초기화 실패해도 앱은 CPU 모드로 계속 실행
+                _dmlEngine = TryCreateEngine(modelPath, InferenceDevice.DirectML, "DirectML");
+                _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
+
+                var snapshotDetector = new SnapshotDetector(_cpuEngine);
+                var cpuRtspDetector = new RtspFrameDetector(_cpuEngine);
+                var dmlRtspDetector = new RtspFrameDetector(_dmlEngine ?? _cpuEngine); // 실패 시 CPU 폴백
+                var gpuRtspDetector = new RtspFrameDetector(_gpuEngine ?? _cpuEngine); // 실패 시 CPU 폴백
+
+                _snapshotVm = new SnapshotViewModel(snapshotDetector);
+                _rtspVm = new RtspViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector);
+
+                DataContext = new ShellViewModel(_snapshotVm, _rtspVm);
+
+                Closed += (_, _) =>
+                {
+                    _snapshotVm?.Dispose();
+                    _rtspVm?.Dispose();
+                    _cpuEngine?.Dispose();
+                    _dmlEngine?.Dispose();
+                    _gpuEngine?.Dispose();
+                };
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"초기화 실패:\n{ex.Message}",
+                    "초기화 오류",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private YoloInferenceEngine? TryCreateEngine(string modelPath, InferenceDevice device, string label)
+        {
+            try
+            {
+                return new YoloInferenceEngine(modelPath, device);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"{label} 초기화 실패 - 해당 옵션은 CPU로 폴백됩니다.\n\n{ex.Message}",
+                    $"{label} 경고",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return null;
+            }
+        }
+    }
+}
