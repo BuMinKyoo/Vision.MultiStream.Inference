@@ -36,6 +36,9 @@ namespace Vision.MultiStream.Inference.ViewModels
         private int _imageHeight;
         private double _displayFps;
         private double _inferenceFps;
+        private double _preprocessMs;
+        private double _inferenceMs;
+        private double _postprocessMs;
 
         private RtspFrameSource? _source;
         private CancellationTokenSource? _cts;
@@ -268,6 +271,45 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        public double PreprocessMs
+        {
+            get => _preprocessMs;
+            private set
+            {
+                if (Math.Abs(_preprocessMs - value) > 0.05)
+                {
+                    _preprocessMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double InferenceMs
+        {
+            get => _inferenceMs;
+            private set
+            {
+                if (Math.Abs(_inferenceMs - value) > 0.05)
+                {
+                    _inferenceMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double PostprocessMs
+        {
+            get => _postprocessMs;
+            private set
+            {
+                if (Math.Abs(_postprocessMs - value) > 0.05)
+                {
+                    _postprocessMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
         public void Start()
         {
             if (IsActive)
@@ -330,6 +372,9 @@ namespace Vision.MultiStream.Inference.ViewModels
                 Detections.Clear();
                 DisplayFps = 0;
                 InferenceFps = 0;
+                PreprocessMs = 0;
+                InferenceMs = 0;
+                PostprocessMs = 0;
                 StatusMessage = "정지";
             }
             catch (Exception ex)
@@ -390,7 +435,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                     }
 
                     IRtspFrameDetector detector = _detectorResolver(_device);
-                    var (detections, _) = await detector
+                    var (detections, timings) = await detector
                         .DetectAsync(frame.BgrPixels, frame.Width, frame.Height, ct)
                         .ConfigureAwait(false);
 
@@ -404,6 +449,9 @@ namespace Vision.MultiStream.Inference.ViewModels
                             Detections.Add(d);
                         }
                         InferenceFps = fps;
+                        PreprocessMs = timings.PreprocessMs;
+                        InferenceMs = timings.InferenceMs;
+                        PostprocessMs = timings.PostprocessMs;
                     }, DispatcherPriority.Background);
                 }
             }
