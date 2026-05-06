@@ -1,0 +1,43 @@
+<Window x:Class="Vision.MultiStream.Inference.Views.BulkAddStreamsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="스트림 일괄 추가"
+        Width="520" Height="420"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Margin="0,0,0,6"
+                   Text="RTSP URL을 한 줄에 하나씩 붙여넣으세요. 빈 줄은 무시됩니다."/>
+
+        <TextBox Grid.Row="1" x:Name="UrlsTextBox"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas"
+                 FontSize="12"/>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock Text="추론 디바이스:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <RadioButton x:Name="CpuRadio" Content="CPU" GroupName="Device" IsChecked="True"
+                         VerticalAlignment="Center"/>
+            <RadioButton x:Name="DmlRadio" Content="DirectML" GroupName="Device" Margin="8,0,0,0"
+                         VerticalAlignment="Center"/>
+            <RadioButton x:Name="GpuRadio" Content="CUDA" GroupName="Device" Margin="8,0,0,0"
+                         VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="취소" Width="80" Height="30" IsCancel="True" Click="OnCancel"/>
+            <Button Content="추가" Width="80" Height="30" Margin="8,0,0,0" IsDefault="True" Click="OnAdd"/>
+        </StackPanel>
+    </Grid>
+</Window>

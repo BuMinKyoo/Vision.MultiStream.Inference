@@ -17,7 +17,7 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _dmlEngine;
         private readonly YoloInferenceEngine? _gpuEngine;
         private SnapshotViewModel? _snapshotVm;
-        private RtspViewModel? _rtspVm;
+        private MultiStreamViewModel? _multiStreamVm;
 
         public MainWindow()
         {
@@ -40,25 +40,25 @@ namespace Vision.MultiStream.Inference
             try
             {
                 _cpuEngine = new YoloInferenceEngine(modelPath, InferenceDevice.Cpu);
-
-                // DirectML/CUDA 초기화 실패해도 앱은 CPU 모드로 계속 실행
                 _dmlEngine = TryCreateEngine(modelPath, InferenceDevice.DirectML, "DirectML");
                 _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
 
                 var snapshotDetector = new SnapshotDetector(_cpuEngine);
-                var cpuRtspDetector = new RtspFrameDetector(_cpuEngine);
-                var dmlRtspDetector = new RtspFrameDetector(_dmlEngine ?? _cpuEngine); // 실패 시 CPU 폴백
-                var gpuRtspDetector = new RtspFrameDetector(_gpuEngine ?? _cpuEngine); // 실패 시 CPU 폴백
+
+                // 같은 ONNX 세션을 여러 스트림이 동시에 호출하지 않도록 디바이스별로 직렬화 래핑
+                IRtspFrameDetector cpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_cpuEngine));
+                IRtspFrameDetector dmlRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_dmlEngine ?? _cpuEngine));
+                IRtspFrameDetector gpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_gpuEngine ?? _cpuEngine));
 
                 _snapshotVm = new SnapshotViewModel(snapshotDetector);
-                _rtspVm = new RtspViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector);
+                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector);
 
-                DataContext = new ShellViewModel(_snapshotVm, _rtspVm);
+                DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm);
 
                 Closed += (_, _) =>
                 {
                     _snapshotVm?.Dispose();
-                    _rtspVm?.Dispose();
+                    _multiStreamVm?.Dispose();
                     _cpuEngine?.Dispose();
                     _dmlEngine?.Dispose();
                     _gpuEngine?.Dispose();

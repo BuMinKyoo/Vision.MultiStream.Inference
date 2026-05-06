@@ -3,15 +3,22 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:vm="clr-namespace:Vision.MultiStream.Inference.ViewModels"
         xmlns:models="clr-namespace:Vision.MultiStream.Inference.Models"
         xmlns:common="clr-namespace:Vision.MultiStream.Inference.Common"
         mc:Ignorable="d"
-        Title="Vision.MultiStream.Inference (YOLOv8)" Height="720" Width="1100">
+        Title="Vision.MultiStream.Inference (YOLOv8)" Height="800" Width="1280">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <common:InverseBoolConverter x:Key="InverseBoolConverter"/>
+
+        <ObjectDataProvider x:Key="LayoutModes" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="vm:LayoutMode"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
     </Window.Resources>
 
     <TabControl>
@@ -28,37 +35,25 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- 상단 툴바 -->
                 <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,8">
-                    <Button Content="이미지 열기..."
-                            Command="{Binding LoadImageCommand}"
-                            Width="120" Height="32"/>
-                    <Button Content="객체 검출"
-                            Command="{Binding DetectCommand}"
-                            Width="120" Height="32" Margin="8,0,0,0"/>
-                    <Button Content="취소"
-                            Command="{Binding CancelCommand}"
-                            Width="80" Height="32" Margin="8,0,0,0"/>
+                    <Button Content="이미지 열기..." Command="{Binding LoadImageCommand}" Width="120" Height="32"/>
+                    <Button Content="객체 검출" Command="{Binding DetectCommand}" Width="120" Height="32" Margin="8,0,0,0"/>
+                    <Button Content="취소" Command="{Binding CancelCommand}" Width="80" Height="32" Margin="8,0,0,0"/>
                     <ProgressBar Width="120" Height="14" Margin="12,0,0,0"
                                  IsIndeterminate="True"
                                  Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
-                    <TextBlock Text="{Binding ImagePath}"
-                               VerticalAlignment="Center" Margin="12,0,0,0"
+                    <TextBlock Text="{Binding ImagePath}" VerticalAlignment="Center" Margin="12,0,0,0"
                                Foreground="Gray" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
 
-                <!-- 좌: 이미지 + 박스 오버레이 -->
-                <Border Grid.Row="1" Grid.Column="0"
-                        BorderBrush="#888" BorderThickness="1" Background="#222"
+                <Border Grid.Row="1" Grid.Column="0" BorderBrush="#888" BorderThickness="1" Background="#222"
                         Margin="0,0,8,0">
                     <Viewbox Stretch="Uniform">
                         <Grid Width="{Binding ImageWidth}" Height="{Binding ImageHeight}">
                             <Image Source="{Binding ImageSource}" Stretch="Fill"/>
                             <ItemsControl ItemsSource="{Binding Detections}">
                                 <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <Canvas/>
-                                    </ItemsPanelTemplate>
+                                    <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemContainerStyle>
                                     <Style TargetType="ContentPresenter">
@@ -70,9 +65,7 @@
                                     <DataTemplate DataType="{x:Type models:Detection}">
                                         <Grid Width="{Binding Width}" Height="{Binding Height}">
                                             <Rectangle Stroke="LimeGreen" StrokeThickness="3"/>
-                                            <Border Background="LimeGreen"
-                                                    VerticalAlignment="Top" HorizontalAlignment="Left"
-                                                    Padding="3,1">
+                                            <Border Background="LimeGreen" VerticalAlignment="Top" HorizontalAlignment="Left" Padding="3,1">
                                                 <TextBlock FontSize="14" FontWeight="Bold" Foreground="Black">
                                                     <Run Text="{Binding ClassName, Mode=OneWay}"/>
                                                     <Run Text=" "/>
@@ -87,11 +80,9 @@
                     </Viewbox>
                 </Border>
 
-                <!-- 우: 검출 결과 리스트 -->
                 <DockPanel Grid.Row="1" Grid.Column="1">
                     <TextBlock DockPanel.Dock="Top" Text="검출 결과" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <ListBox ItemsSource="{Binding Detections}"
-                             FontFamily="Consolas" FontSize="12">
+                    <ListBox ItemsSource="{Binding Detections}" FontFamily="Consolas" FontSize="12">
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="{x:Type models:Detection}">
                                 <StackPanel>
@@ -101,14 +92,10 @@
                                         <Run Text="{Binding Confidence, StringFormat={}{0:P1}, Mode=OneWay}" Foreground="DarkGreen"/>
                                     </TextBlock>
                                     <TextBlock Foreground="Gray">
-                                        <Run Text="x="/>
-                                        <Run Text="{Binding X, StringFormat={}{0:F0}, Mode=OneWay}"/>
-                                        <Run Text=" y="/>
-                                        <Run Text="{Binding Y, StringFormat={}{0:F0}, Mode=OneWay}"/>
-                                        <Run Text=" w="/>
-                                        <Run Text="{Binding Width, StringFormat={}{0:F0}, Mode=OneWay}"/>
-                                        <Run Text=" h="/>
-                                        <Run Text="{Binding Height, StringFormat={}{0:F0}, Mode=OneWay}"/>
+                                        <Run Text="x="/><Run Text="{Binding X, StringFormat={}{0:F0}, Mode=OneWay}"/>
+                                        <Run Text=" y="/><Run Text="{Binding Y, StringFormat={}{0:F0}, Mode=OneWay}"/>
+                                        <Run Text=" w="/><Run Text="{Binding Width, StringFormat={}{0:F0}, Mode=OneWay}"/>
+                                        <Run Text=" h="/><Run Text="{Binding Height, StringFormat={}{0:F0}, Mode=OneWay}"/>
                                     </TextBlock>
                                 </StackPanel>
                             </DataTemplate>
@@ -116,133 +103,228 @@
                     </ListBox>
                 </DockPanel>
 
-                <!-- 하단 상태바 -->
                 <Border Grid.Row="2" Grid.ColumnSpan="2" Background="#EEE" Margin="0,8,0,0" Padding="8,4">
                     <TextBlock Text="{Binding StatusMessage}" Foreground="#333"/>
                 </Border>
             </Grid>
         </TabItem>
 
-        <!-- ============ RTSP 탭 ============ -->
-        <TabItem Header="RTSP (실시간 스트림)" DataContext="{Binding Rtsp}">
-            <Grid Margin="10">
+        <!-- ============ RTSP 멀티 스트림 탭 ============ -->
+        <TabItem Header="RTSP (다중 스트림)" DataContext="{Binding MultiStream}">
+            <Grid Margin="8">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="280"/>
                 </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
 
-                <!-- 상단 툴바 -->
-                <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,8">
-                    <TextBlock Text="RTSP URL:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <TextBox Text="{Binding RtspUrl, UpdateSourceTrigger=PropertyChanged}"
-                             Width="320" Height="28" VerticalContentAlignment="Center"/>
-                    <RadioButton Content="CPU" VerticalAlignment="Center" Margin="12,0,0,0"
-                                 IsChecked="{Binding UseCpu}"
-                                 IsEnabled="{Binding IsStreaming, Converter={StaticResource InverseBoolConverter}}"/>
-                    <RadioButton Content="DirectML" VerticalAlignment="Center" Margin="8,0,0,0"
-                                 IsChecked="{Binding UseDirectML}"
-                                 IsEnabled="{Binding IsStreaming, Converter={StaticResource InverseBoolConverter}}"/>
-                    <RadioButton Content="CUDA" VerticalAlignment="Center" Margin="8,0,0,0"
-                                 IsChecked="{Binding UseGpu}"
-                                 IsEnabled="{Binding IsStreaming, Converter={StaticResource InverseBoolConverter}}"/>
-                    <Button Content="연결"
-                            Command="{Binding ConnectCommand}"
-                            Width="80" Height="32" Margin="8,0,0,0"/>
-                    <Button Content="중지"
-                            Command="{Binding DisconnectCommand}"
-                            Width="80" Height="32" Margin="8,0,0,0"/>
-                    <TextBlock VerticalAlignment="Center" Margin="16,0,0,0" Foreground="DarkBlue">
-                        <Run Text="화면 FPS:"/>
-                        <Run Text="{Binding DisplayFps, StringFormat={}{0:F1}, Mode=OneWay}" FontWeight="Bold"/>
-                    </TextBlock>
-                    <TextBlock VerticalAlignment="Center" Margin="12,0,0,0" Foreground="DarkGreen">
-                        <Run Text="추론 FPS:"/>
-                        <Run Text="{Binding InferenceFps, StringFormat={}{0:F1}, Mode=OneWay}" FontWeight="Bold"/>
-                    </TextBlock>
-                </StackPanel>
+                <!-- 좌: 사이드 패널 (추가 폼 + 스트림 목록 + 전체제어) -->
+                <Border Grid.Column="0" BorderBrush="#CCC" BorderThickness="1" Background="#F8F8F8" Margin="0,0,8,0">
+                    <DockPanel LastChildFill="True" Margin="8">
+                        <!-- 추가 폼 -->
+                        <Border DockPanel.Dock="Top" BorderBrush="#DDD" BorderThickness="0,0,0,1" Padding="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock Text="스트림 추가" FontWeight="Bold" Margin="0,0,0,6"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="이름" VerticalAlignment="Center"/>
+                                    <TextBox  Grid.Row="0" Grid.Column="1" Margin="0,0,0,4"
+                                              Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="URL" VerticalAlignment="Center"/>
+                                    <TextBox  Grid.Row="1" Grid.Column="1"
+                                              Text="{Binding NewRtspUrl, UpdateSourceTrigger=PropertyChanged}"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <RadioButton Content="CPU" IsChecked="{Binding NewUseCpu}" GroupName="NewDevice"/>
+                                    <RadioButton Content="DML" IsChecked="{Binding NewUseDirectML}" GroupName="NewDevice" Margin="8,0,0,0"/>
+                                    <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,0"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28"/>
+                                    <Button Content="📋 일괄 추가" Command="{Binding AddBulkCommand}" Width="110" Height="28" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
 
-                <!-- 좌: 실시간 영상 + 박스 오버레이 -->
-                <Border Grid.Row="1" Grid.Column="0"
-                        BorderBrush="#888" BorderThickness="1" Background="#000"
-                        Margin="0,0,8,0">
-                    <Viewbox Stretch="Uniform">
-                        <Grid Width="{Binding ImageWidth}" Height="{Binding ImageHeight}">
-                            <Image Source="{Binding ImageSource}" Stretch="Fill"/>
-                            <ItemsControl ItemsSource="{Binding Detections}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <Canvas/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemContainerStyle>
-                                    <Style TargetType="ContentPresenter">
-                                        <Setter Property="Canvas.Left" Value="{Binding X}"/>
-                                        <Setter Property="Canvas.Top" Value="{Binding Y}"/>
-                                    </Style>
-                                </ItemsControl.ItemContainerStyle>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="{x:Type models:Detection}">
-                                        <Grid Width="{Binding Width}" Height="{Binding Height}">
-                                            <Rectangle Stroke="Yellow" StrokeThickness="3"/>
-                                            <Border Background="Yellow"
-                                                    VerticalAlignment="Top" HorizontalAlignment="Left"
-                                                    Padding="3,1">
-                                                <TextBlock FontSize="14" FontWeight="Bold" Foreground="Black">
-                                                    <Run Text="{Binding ClassName, Mode=OneWay}"/>
-                                                    <Run Text=" "/>
-                                                    <Run Text="{Binding Confidence, StringFormat={}{0:P0}, Mode=OneWay}"/>
-                                                </TextBlock>
-                                            </Border>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </Grid>
-                    </Viewbox>
-                </Border>
-
-                <!-- 우: 검출 결과 리스트 -->
-                <DockPanel Grid.Row="1" Grid.Column="1">
-                    <TextBlock DockPanel.Dock="Top" Text="실시간 검출" FontWeight="Bold" Margin="0,0,0,4"/>
-                    <ListBox ItemsSource="{Binding Detections}"
-                             FontFamily="Consolas" FontSize="12">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate DataType="{x:Type models:Detection}">
-                                <TextBlock>
-                                    <Run Text="{Binding ClassName, Mode=OneWay}" FontWeight="Bold"/>
-                                    <Run Text="  "/>
-                                    <Run Text="{Binding Confidence, StringFormat={}{0:P1}, Mode=OneWay}" Foreground="DarkGreen"/>
+                        <!-- 전체 제어 (목록 위쪽 하단) -->
+                        <Border DockPanel.Dock="Bottom" BorderBrush="#DDD" BorderThickness="0,1,0,0" Padding="0,8,0,0">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="▶ 전체 시작" Command="{Binding StartAllCommand}" Width="100" Height="28"/>
+                                    <Button Content="⏸ 전체 중지" Command="{Binding StopAllCommand}" Width="100" Height="28" Margin="6,0,0,0"/>
+                                </StackPanel>
+                                <Button Content="✕ 전체 삭제" Command="{Binding RemoveAllCommand}" Height="26" Margin="0,6,0,0"
+                                        HorizontalAlignment="Stretch" Foreground="#A00"/>
+                                <TextBlock Margin="0,8,0,0" Foreground="#555">
+                                    <Run Text="등록:"/>
+                                    <Run Text="{Binding TotalCount, Mode=OneWay}" FontWeight="Bold"/>
+                                    <Run Text="개"/>
                                 </TextBlock>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </DockPanel>
+                            </StackPanel>
+                        </Border>
 
-                <!-- 하단 상태바 -->
-                <Border Grid.Row="2" Grid.ColumnSpan="2" Background="#EEE" Margin="0,8,0,0" Padding="8,4">
-                    <DockPanel>
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <TextBlock Foreground="#555">
-                                <Run Text="전처리:"/>
-                                <Run Text="{Binding PreprocessMs, StringFormat={}{0:F1}ms, Mode=OneWay}" FontWeight="Bold"/>
-                            </TextBlock>
-                            <TextBlock Foreground="#555" Margin="12,0,0,0">
-                                <Run Text="추론:"/>
-                                <Run Text="{Binding InferenceMs, StringFormat={}{0:F1}ms, Mode=OneWay}" FontWeight="Bold"/>
-                            </TextBlock>
-                            <TextBlock Foreground="#555" Margin="12,0,0,0">
-                                <Run Text="후처리:"/>
-                                <Run Text="{Binding PostprocessMs, StringFormat={}{0:F1}ms, Mode=OneWay}" FontWeight="Bold"/>
-                            </TextBlock>
-                        </StackPanel>
-                        <TextBlock Text="{Binding StatusMessage}" Foreground="#333"/>
+                        <!-- 스트림 목록 -->
+                        <ListBox ItemsSource="{Binding Streams}" Margin="0,8,0,8"
+                                 HorizontalContentAlignment="Stretch"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:StreamItemViewModel}">
+                                    <Border Padding="4" BorderBrush="#EEE" BorderThickness="0,0,0,1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" FontWeight="Bold"
+                                                       Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                            <Border Grid.Row="0" Grid.Column="1" Background="#333"
+                                                    Padding="4,1" Margin="6,0,0,0" CornerRadius="2">
+                                                <TextBlock Text="{Binding DeviceLabel}" Foreground="White" FontSize="10"/>
+                                            </Border>
+                                            <Ellipse Grid.Row="0" Grid.Column="2" Width="8" Height="8"
+                                                     Margin="6,0,0,0" VerticalAlignment="Center"
+                                                     Fill="LimeGreen"
+                                                     Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                                                       Foreground="Gray" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                       Text="{Binding RtspUrl}"/>
+                                            <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                                <Button Content="▶/⏸" Command="{Binding ToggleCommand}"
+                                                        Width="38" Height="22" FontSize="10" Padding="0"/>
+                                                <Button Content="✕" Command="{Binding RemoveCommand}"
+                                                        Width="22" Height="22" FontSize="10" Padding="0" Margin="4,0,0,0"
+                                                        Foreground="#A00"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </DockPanel>
                 </Border>
+
+                <!-- 우: 타일 그리드 -->
+                <DockPanel Grid.Column="1">
+                    <!-- 상단 툴바: 레이아웃 선택 -->
+                    <Border DockPanel.Dock="Top" Background="#EEE" Padding="8,4" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="레이아웃:" VerticalAlignment="Center"/>
+                            <ComboBox Width="120" Margin="6,0,0,0"
+                                      ItemsSource="{Binding Source={StaticResource LayoutModes}}"
+                                      SelectedItem="{Binding Layout}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 자동 타일링 그리드 -->
+                    <ItemsControl ItemsSource="{Binding Streams}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Columns="{Binding GridColumns}"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:StreamItemViewModel}">
+                                <Border BorderBrush="#888" BorderThickness="1" Background="#000" Margin="2">
+                                    <Grid>
+                                        <!-- 영상 + 검출 박스 -->
+                                        <Viewbox Stretch="Uniform">
+                                            <Grid Width="{Binding ImageWidth}" Height="{Binding ImageHeight}">
+                                                <Image Source="{Binding ImageSource}" Stretch="Fill"/>
+                                                <ItemsControl ItemsSource="{Binding Detections}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemContainerStyle>
+                                                        <Style TargetType="ContentPresenter">
+                                                            <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                                            <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                                                        </Style>
+                                                    </ItemsControl.ItemContainerStyle>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="{x:Type models:Detection}">
+                                                            <Grid Width="{Binding Width}" Height="{Binding Height}">
+                                                                <Rectangle Stroke="Yellow" StrokeThickness="2"/>
+                                                                <Border Background="Yellow" VerticalAlignment="Top" HorizontalAlignment="Left" Padding="2,0">
+                                                                    <TextBlock FontSize="11" FontWeight="Bold" Foreground="Black">
+                                                                        <Run Text="{Binding ClassName, Mode=OneWay}"/>
+                                                                        <Run Text=" "/>
+                                                                        <Run Text="{Binding Confidence, StringFormat={}{0:P0}, Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                </Border>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </Grid>
+                                        </Viewbox>
+
+                                        <!-- 좌상단: 이름 + 디바이스 -->
+                                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Background="#B0000000" Padding="6,2" Margin="4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}" Foreground="White" FontWeight="Bold"/>
+                                                <TextBlock Text="{Binding DeviceLabel}" Foreground="LightGray" Margin="6,0,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- 우상단: ✕ 버튼 -->
+                                        <Button Content="✕" Command="{Binding RemoveCommand}"
+                                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="4"
+                                                Width="22" Height="22" FontSize="11" Padding="0"
+                                                Background="#B0000000" Foreground="White" BorderThickness="0"/>
+
+                                        <!-- 좌하단: FPS / 상태 -->
+                                        <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                                Background="#B0000000" Padding="6,2" Margin="4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Foreground="LightGreen">
+                                                    <Run Text="화면"/>
+                                                    <Run Text="{Binding DisplayFps, StringFormat={}{0:F1}, Mode=OneWay}" FontWeight="Bold"/>
+                                                </TextBlock>
+                                                <TextBlock Foreground="Yellow" Margin="8,0,0,0">
+                                                    <Run Text="추론"/>
+                                                    <Run Text="{Binding InferenceFps, StringFormat={}{0:F1}, Mode=OneWay}" FontWeight="Bold"/>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- 우하단: 상태 -->
+                                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                Background="#B0000000" Padding="6,2" Margin="4">
+                                            <TextBlock Text="{Binding StatusMessage}" Foreground="LightGray" FontSize="11"/>
+                                        </Border>
+
+                                        <!-- 비활성 상태 안내 -->
+                                        <TextBlock Text="정지됨 — ▶ 시작" Foreground="#888" FontSize="14"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </DockPanel>
             </Grid>
         </TabItem>
     </TabControl>

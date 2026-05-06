@@ -1,19 +1,18 @@
 namespace Vision.MultiStream.Inference.ViewModels
 {
     /// <summary>
-    /// 탭 두 개(Snapshot / Rtsp)를 담는 최상위 ViewModel.
-    /// 자기 자신은 상태 없음 — 자식 VM 두 개를 그대로 노출.
+    /// 탭 두 개(Snapshot / MultiStream)를 담는 최상위 ViewModel.
     /// </summary>
     public class ShellViewModel
     {
-        public ShellViewModel(SnapshotViewModel snapshot, RtspViewModel rtsp)
+        public ShellViewModel(SnapshotViewModel snapshot, MultiStreamViewModel multiStream)
         {
             Snapshot = snapshot;
-            Rtsp = rtsp;
+            MultiStream = multiStream;
         }
 
         public SnapshotViewModel Snapshot { get; }
 
-        public RtspViewModel Rtsp { get; }
+        public MultiStreamViewModel MultiStream { get; }
     }
 }
