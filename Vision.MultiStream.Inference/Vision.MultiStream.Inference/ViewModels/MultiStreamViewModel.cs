@@ -39,7 +39,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             AddStreamCommand = new RelayCommand(AddStream, () => !string.IsNullOrWhiteSpace(NewRtspUrl));
             AddBulkCommand = new RelayCommand(AddBulk);
-            StartAllCommand = new RelayCommand(StartAll);
+            StartAllVideoCommand = new RelayCommand(() => SetAllVideo(true));
+            StopAllVideoCommand = new RelayCommand(() => SetAllVideo(false));
+            StartAllAudioCommand = new RelayCommand(() => SetAllAudio(true));
+            StopAllAudioCommand = new RelayCommand(() => SetAllAudio(false));
             StopAllCommand = new RelayCommand(StopAll);
             RemoveAllCommand = new RelayCommand(RemoveAll);
         }
@@ -48,7 +51,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         public RelayCommand AddStreamCommand { get; }
         public RelayCommand AddBulkCommand { get; }
-        public RelayCommand StartAllCommand { get; }
+        public RelayCommand StartAllVideoCommand { get; }
+        public RelayCommand StopAllVideoCommand { get; }
+        public RelayCommand StartAllAudioCommand { get; }
+        public RelayCommand StopAllAudioCommand { get; }
         public RelayCommand StopAllCommand { get; }
         public RelayCommand RemoveAllCommand { get; }
 
@@ -205,11 +211,19 @@ namespace Vision.MultiStream.Inference.ViewModels
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private void StartAll()
+        private void SetAllVideo(bool enabled)
         {
             foreach (var s in Streams)
             {
-                s.Start();
+                s.SetVideo(enabled);
+            }
+        }
+
+        private void SetAllAudio(bool enabled)
+        {
+            foreach (var s in Streams)
+            {
+                s.SetAudio(enabled);
             }
         }
 
@@ -217,7 +231,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             foreach (var s in Streams)
             {
-                s.Stop();
+                s.SetVideo(false);
+                s.SetAudio(false);
             }
         }
 

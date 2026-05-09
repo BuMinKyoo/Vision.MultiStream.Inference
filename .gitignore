@@ -49,3 +49,6 @@ $RECYCLE.BIN/
 Tester/cameraTest/ffmpeg.exe
 Tester/cameraTest/Video3.mp4
 Tester/mediamtx_v*_windows_amd64/
+
+# FFmpeg 네이티브 DLL — 100MB 제한 초과로 직접 배치 (README §9 참고)
+Vision.MultiStream.Inference/Vision.MultiStream.Inference/Native/win-x64/*.dll

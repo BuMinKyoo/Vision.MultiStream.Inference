@@ -10,6 +10,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Vision.MultiStream.Inference.Common;
 using Vision.MultiStream.Inference.Models;
+using Vision.MultiStream.Inference.Services.Audio;
 using Vision.MultiStream.Inference.Services.Rtsp;
 using Vision.MultiStream.Inference.Services.Yolo;
 
@@ -17,8 +18,13 @@ namespace Vision.MultiStream.Inference.ViewModels
 {
     /// <summary>
     /// 멀티스트림에서 1개 RTSP 스트림을 표현하는 ViewModel.
-    /// 책임: 자기 자신의 RtspFrameSource + 추론 루프 수명 관리.
-    /// 공유 자원(디바이스별 IRtspFrameDetector)는 외부에서 주입받음.
+    /// 책임: 자기 자신의 RtspFrameSource + 추론 루프 + 오디오 출력 수명 관리.
+    ///
+    /// 영상/소리 두 개의 독립 토글:
+    ///   - IsVideoEnabled : 비디오 디코딩 + 표시 + 추론
+    ///   - IsAudioEnabled : 오디오 디코딩 + 스피커 출력
+    /// 두 토글은 독립적으로 ON/OFF 가능. 둘 다 OFF 면 RTSP 연결 자체를 끊음.
+    /// 한쪽만 토글하면 RTSP 연결을 잠깐 재수립한다 (간단함을 위한 의도적 선택).
     /// </summary>
     public sealed class StreamItemViewModel : BaseViewModel, IDisposable
     {
@@ -29,7 +35,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _name;
         private string _rtspUrl;
         private InferenceDevice _device;
-        private bool _isActive;
+        private bool _isVideoEnabled;
+        private bool _isAudioEnabled;
         private string _statusMessage = "대기";
         private WriteableBitmap? _imageSource;
         private int _imageWidth;
@@ -61,31 +68,21 @@ namespace Vision.MultiStream.Inference.ViewModels
             _onRemoveRequested = onRemoveRequested;
             _dispatcher = Application.Current.Dispatcher;
 
-            StartCommand = new RelayCommand(Start, () => !IsActive && !string.IsNullOrWhiteSpace(RtspUrl));
-            StopCommand = new RelayCommand(Stop, () => IsActive);
-            ToggleCommand = new RelayCommand(() =>
-            {
-                if (IsActive)
-                {
-                    Stop();
-                }
-                else
-                {
-                    Start();
-                }
-            });
+            ToggleVideoCommand = new RelayCommand(ToggleVideo, () => !string.IsNullOrWhiteSpace(RtspUrl));
+            ToggleAudioCommand = new RelayCommand(ToggleAudio, () => !string.IsNullOrWhiteSpace(RtspUrl));
+            StopCommand = new RelayCommand(StopAll, () => IsActive);
             RemoveCommand = new RelayCommand(() =>
             {
-                Stop();
+                StopAll();
                 _onRemoveRequested(this);
             });
         }
 
         public ObservableCollection<Detection> Detections { get; } = new();
 
-        public RelayCommand StartCommand { get; }
+        public RelayCommand ToggleVideoCommand { get; }
+        public RelayCommand ToggleAudioCommand { get; }
         public RelayCommand StopCommand { get; }
-        public RelayCommand ToggleCommand { get; }
         public RelayCommand RemoveCommand { get; }
 
         public string Name
@@ -112,7 +109,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 }
                 _rtspUrl = value;
                 OnPropertyChanged();
-                StartCommand.RaiseCanExecuteChanged();
+                ToggleVideoCommand.RaiseCanExecuteChanged();
+                ToggleAudioCommand.RaiseCanExecuteChanged();
             }
         }
 
@@ -177,21 +175,39 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        public bool IsActive
+        public bool IsVideoEnabled
         {
-            get => _isActive;
+            get => _isVideoEnabled;
             private set
             {
-                if (_isActive == value)
+                if (_isVideoEnabled == value)
                 {
                     return;
                 }
-                _isActive = value;
+                _isVideoEnabled = value;
                 OnPropertyChanged();
-                StartCommand.RaiseCanExecuteChanged();
+                OnPropertyChanged(nameof(IsActive));
                 StopCommand.RaiseCanExecuteChanged();
             }
         }
+
+        public bool IsAudioEnabled
+        {
+            get => _isAudioEnabled;
+            private set
+            {
+                if (_isAudioEnabled == value)
+                {
+                    return;
+                }
+                _isAudioEnabled = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsActive));
+                StopCommand.RaiseCanExecuteChanged();
+            }
+        }
+
+        public bool IsActive => _isVideoEnabled || _isAudioEnabled;
 
         public string StatusMessage
         {
@@ -310,14 +326,93 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        public void Start()
+        // 외부(MultiStreamViewModel 의 전체 ON/OFF) 에서 사용할 수 있는 직접 setter
+        public void SetVideo(bool enabled)
         {
-            if (IsActive)
+            if (_isVideoEnabled == enabled)
             {
                 return;
             }
+            _isVideoEnabled = enabled;
+            OnPropertyChanged(nameof(IsVideoEnabled));
+            OnPropertyChanged(nameof(IsActive));
+            StopCommand.RaiseCanExecuteChanged();
+            ApplyState();
+        }
+
+        public void SetAudio(bool enabled)
+        {
+            if (_isAudioEnabled == enabled)
+            {
+                return;
+            }
+            _isAudioEnabled = enabled;
+            OnPropertyChanged(nameof(IsAudioEnabled));
+            OnPropertyChanged(nameof(IsActive));
+            StopCommand.RaiseCanExecuteChanged();
+            ApplyState();
+        }
+
+        private void ToggleVideo()
+        {
+            SetVideo(!_isVideoEnabled);
+        }
+
+        private void ToggleAudio()
+        {
+            SetAudio(!_isAudioEnabled);
+        }
+
+        private void StopAll()
+        {
+            bool changed = _isVideoEnabled || _isAudioEnabled;
+            _isVideoEnabled = false;
+            _isAudioEnabled = false;
+            if (changed)
+            {
+                OnPropertyChanged(nameof(IsVideoEnabled));
+                OnPropertyChanged(nameof(IsAudioEnabled));
+                OnPropertyChanged(nameof(IsActive));
+                StopCommand.RaiseCanExecuteChanged();
+                ApplyState();
+            }
+        }
+
+        /// <summary>
+        /// 두 토글의 현재 상태에 맞춰 source 를 재구성한다.
+        /// 어느 한쪽이라도 토글되면 항상 Stop → Start 로 단순화 (의도적인 짧은 reconnect).
+        /// </summary>
+        private void ApplyState()
+        {
+            // 항상 기존 source 닫고 새로 구성
+            TearDownSource();
+
+            bool wantVideo = _isVideoEnabled;
+            bool wantAudio = _isAudioEnabled;
+
+            if (!wantVideo && !wantAudio)
+            {
+                Detections.Clear();
+                ImageSource = null;
+                ImageWidth = 0;
+                ImageHeight = 0;
+                DisplayFps = 0;
+                InferenceFps = 0;
+                PreprocessMs = 0;
+                InferenceMs = 0;
+                PostprocessMs = 0;
+                StatusMessage = "정지";
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(RtspUrl))
             {
+                StatusMessage = "URL 없음";
+                _isVideoEnabled = false;
+                _isAudioEnabled = false;
+                OnPropertyChanged(nameof(IsVideoEnabled));
+                OnPropertyChanged(nameof(IsAudioEnabled));
+                OnPropertyChanged(nameof(IsActive));
                 return;
             }
 
@@ -329,28 +424,27 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source = new RtspFrameSource(RtspUrl);
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
-                _source.Start();
 
-                _cts = new CancellationTokenSource();
-                _inferenceTask = Task.Run(() => InferenceLoopAsync(_cts.Token));
+                IAudioOutput? audioOutput = wantAudio ? new WasapiAudioOutput() : null;
+                _source.Start(wantVideo, audioOutput);
 
-                IsActive = true;
+                if (wantVideo)
+                {
+                    _cts = new CancellationTokenSource();
+                    _inferenceTask = Task.Run(() => InferenceLoopAsync(_cts.Token));
+                }
+
                 StatusMessage = "연결 중...";
             }
             catch (Exception ex)
             {
                 StatusMessage = $"연결 실패: {ex.Message}";
-                Stop();
+                TearDownSource();
             }
         }
 
-        public void Stop()
+        private void TearDownSource()
         {
-            if (!IsActive && _source == null)
-            {
-                return;
-            }
-
             try
             {
                 _cts?.Cancel();
@@ -367,19 +461,10 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _inferenceTask = null;
                 _cts?.Dispose();
                 _cts = null;
-
-                IsActive = false;
-                Detections.Clear();
-                DisplayFps = 0;
-                InferenceFps = 0;
-                PreprocessMs = 0;
-                InferenceMs = 0;
-                PostprocessMs = 0;
-                StatusMessage = "정지";
             }
-            catch (Exception ex)
+            catch
             {
-                StatusMessage = $"중지 중 오류: {ex.Message}";
+                // teardown 중 예외는 무시
             }
         }
 
@@ -466,7 +551,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         public void Dispose()
         {
-            Stop();
+            StopAll();
         }
 
         private sealed class FpsCounter

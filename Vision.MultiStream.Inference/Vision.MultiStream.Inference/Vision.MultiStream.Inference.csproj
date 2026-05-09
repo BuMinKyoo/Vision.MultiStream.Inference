@@ -6,21 +6,42 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- FFmpeg.AutoGen 의 P/Invoke 결과 포인터 직접 다루기 위해 필요 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- FFmpeg native DLL 이 x64 라 .NET 호스트도 x64 강제. Platforms 제한은 IDE 디버그 launch 호환을 위해 두지 않음. -->
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- CUDA로 전환하려면 아래 항목을 주석 처리하고 Microsoft.ML.OnnxRuntime.Gpu 로 교체 -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" />
 	<!--<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.16.2" />-->
-	  
+
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20241108" />
+
+    <!-- RTSP 비디오/오디오 디코딩용 FFmpeg.AutoGen (FFmpeg 8.x 바인딩) -->
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <!-- 디코딩한 PCM 을 스피커로 출력 -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="Assets\Models\yolov8n.onnx">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    FFmpeg 네이티브 DLL 들을 출력 폴더(bin\$(Configuration)\net10.0-windows\)로 복사.
+    FFmpegLibraryLoader 가 시작 시 av_register_all 등을 호출하기 전에
+    av_set_dll_directory 로 이 폴더를 잡아 준다.
+  -->
+  <ItemGroup>
+    <None Include="Native\win-x64\*.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>%(Filename)%(Extension)</Link>
     </None>
   </ItemGroup>
 

@@ -1,29 +1,52 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Channels;
-using OpenCvSharp;
+using FFmpeg.AutoGen;
+using Vision.MultiStream.Inference.Services.Audio;
+using Vision.MultiStream.Inference.Services.Rtsp.FFmpeg;
 
 namespace Vision.MultiStream.Inference.Services.Rtsp
 {
     /// <summary>
-    /// RTSP URL 에서 프레임을 읽어 1슬롯 latest-only 큐로 노출하는 서비스.
-    /// 책임 1개: "수신 → 큐 채우기".
-    /// 추론/렌더링 책임은 호출자(ViewModel) 가 가짐.
+    /// RTSP URL 에서 영상/오디오를 받아 처리하는 서비스.
     ///
-    /// 스레드 모델:
-    ///   - 자기 전용 백그라운드 스레드 1개에서 VideoCapture.Read() 블로킹 루프
-    ///   - Channel 의 FullMode=DropOldest 로 쓰기 비차단 → 소비자가 늦어도 송신 안 막힘
-    ///   - 결과: 소비자는 항상 "가장 최신 프레임" 만 보게 됨 (영상 끊김 방지의 핵심)
+    /// FFmpeg 정석 3-쓰레드 모델:
+    ///   Thread 1 (Demuxer)         : av_read_frame() 으로 RTSP 패킷 수신 후 비디오/오디오 큐로 분기.
+    ///   Thread 2 (Video Decoder)   : 비디오 큐 → H.264 디코딩 → sws_scale → BGR → RtspFrame.
+    ///   Thread 3 (Audio Decoder)   : 오디오 큐 → AAC/G.711 디코딩 → swr_resample → PCM s16 → IAudioOutput.
+    ///
+    /// 오디오 출력 정책 (1번 정책 — "끈 스트림은 비용 0"):
+    ///   - Start(audioOutput=null) 면 오디오 디코더/오디오 큐 자체를 만들지 않음 → 디먹서가 오디오 패킷 즉시 drop.
+    ///   - Start(audioOutput!=null) 면 오디오 스레드 가동.
+    ///   - 오디오 토글은 ViewModel 측에서 Stop/Start 로 처리 (구현 단순화).
+    ///
+    /// Channel 의 FullMode=DropOldest 로 추론용 큐는 항상 latest-only.
     /// </summary>
-    public sealed class RtspFrameSource : IDisposable
+    public sealed unsafe class RtspFrameSource : IDisposable
     {
         private readonly string _url;
         private readonly Channel<RtspFrame> _channel;
 
         private CancellationTokenSource? _cts;
-        private Thread? _captureThread;
+        private Thread? _demuxThread;
+        private Thread? _videoThread;
+        private Thread? _audioThread;
         private volatile bool _isRunning;
+
+        // 오디오 출력 — 외부에서 주입. null 이면 오디오 비활성.
+        private IAudioOutput? _audioOutput;
+        // 비디오 디코딩/표시 ON/OFF. false 면 데먹서가 비디오 패킷을 drop → 디코더 스레드 자체를 안 띄움.
+        private bool _videoEnabled;
+
+        // 디먹서가 디코더에게 packet pointer 를 넘기는 큐. 클론한 AVPacket* 를 IntPtr 로 들고 다님.
+        private BlockingCollection<IntPtr>? _videoPacketQueue;
+        private BlockingCollection<IntPtr>? _audioPacketQueue;
+
+        // 큐 깊이: 너무 깊으면 latency 증가, 너무 얕으면 디먹서 차단됨.
+        private const int VideoQueueCapacity = 4;
+        private const int AudioQueueCapacity = 32;
 
         public RtspFrameSource(string rtspUrl)
         {
@@ -36,43 +59,49 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             });
         }
 
-        /// <summary>
-        /// 소비자(ViewModel) 는 이 Reader 에서 ReadAsync / WaitToReadAsync 로 프레임 받음.
-        /// </summary>
         public ChannelReader<RtspFrame> Reader => _channel.Reader;
-
         public bool IsRunning => _isRunning;
-
-        /// <summary>
-        /// 연결/오류/종료 상태 변화 알림 (UI 에 출력하기 좋게).
-        /// </summary>
         public event EventHandler<string>? StatusChanged;
-
-        /// <summary>
-        /// 프레임이 도착할 때마다 캡처 스레드에서 발생.
-        /// 영상 표시(WriteableBitmap)용 — 모든 프레임을 받음. 핸들러에서 무거운 작업 금지.
-        /// 추론은 별도로 Reader(채널)에서 latest-only 로 받을 것.
-        /// </summary>
         public event EventHandler<RtspFrame>? FrameCaptured;
 
-        public void Start()
+        /// <summary>
+        /// videoEnabled = true 면 비디오 디코딩 + FrameCaptured/Reader 출력.
+        /// audioOutput 가 null 이 아니면 오디오 디코딩 + 출력 활성화.
+        /// 둘 다 꺼져 있으면 시작하지 않는다.
+        /// </summary>
+        public void Start(bool videoEnabled, IAudioOutput? audioOutput)
         {
             if (_isRunning)
             {
                 return;
             }
+            if (!videoEnabled && audioOutput == null)
+            {
+                return; // 둘 다 OFF 면 RTSP 자체를 안 연다
+            }
 
+            FFmpegLibraryLoader.EnsureRegistered();
+
+            _videoEnabled = videoEnabled;
+            _audioOutput = audioOutput;
             _cts = new CancellationTokenSource();
 
-            // VideoCapture.Read()가 블로킹 호출이라 Task(ThreadPool)가 아닌 전용 Thread 사용
-            // ThreadPool 스레드를 영구 점유하면 다른 Task들이 스레드를 못 얻어 굶어 죽음
-            _captureThread = new Thread(() => CaptureLoop(_cts.Token))
+            if (_videoEnabled)
             {
-                IsBackground = true, // 메인 스레드 종료 시 이 스레드도 자동 종료
-                Name = $"RtspCapture[{_url}]"
+                _videoPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), VideoQueueCapacity);
+            }
+            if (_audioOutput != null)
+            {
+                _audioPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), AudioQueueCapacity);
+            }
+
+            _demuxThread = new Thread(() => DemuxLoop(_cts.Token))
+            {
+                IsBackground = true,
+                Name = $"RtspDemux[{_url}]"
             };
             _isRunning = true;
-            _captureThread.Start();
+            _demuxThread.Start();
         }
 
         public void Stop()
@@ -83,88 +112,604 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             }
 
             _isRunning = false;
-            _cts?.Cancel(); // CaptureLoop의 ct.IsCancellationRequested를 true로 만들어 루프 탈출 유도
-            _captureThread?.Join(TimeSpan.FromSeconds(2)); // 캡처 스레드가 완전히 끝날 때까지 최대 2초 대기
-            _captureThread = null;
+            _cts?.Cancel();
+
+            // 큐들의 CompleteAdding 으로 디코더 스레드의 GetConsumingEnumerable 이 빠져나오게 한다.
+            _videoPacketQueue?.CompleteAdding();
+            _audioPacketQueue?.CompleteAdding();
+
+            // 가장 오래 걸릴 수 있는 demux 부터, 그다음 비디오/오디오 디코더.
+            _demuxThread?.Join(TimeSpan.FromSeconds(3));
+            _videoThread?.Join(TimeSpan.FromSeconds(2));
+            _audioThread?.Join(TimeSpan.FromSeconds(2));
+            _demuxThread = null;
+            _videoThread = null;
+            _audioThread = null;
+
+            DrainAndFreePackets(_videoPacketQueue);
+            DrainAndFreePackets(_audioPacketQueue);
+            _videoPacketQueue?.Dispose();
+            _audioPacketQueue?.Dispose();
+            _videoPacketQueue = null;
+            _audioPacketQueue = null;
+
+            _audioOutput?.Dispose();
+            _audioOutput = null;
+
             _cts?.Dispose();
             _cts = null;
         }
 
-        private void CaptureLoop(CancellationToken ct)
+        // ========== Thread 1 : Demuxer ==========
+
+        private void DemuxLoop(CancellationToken ct)
         {
-            VideoCapture? capture = null;
-            Mat? mat = null;
+            AVFormatContext* fmtCtx = null;
+            AVCodecContext* videoCodecCtx = null;
+            AVCodecContext* audioCodecCtx = null;
+            AVPacket* packet = null;
+            int videoStreamIndex = -1;
+            int audioStreamIndex = -1;
+            bool needFinalize = true;
+
             try
             {
-                // VideoCapture: 내부적으로 FFmpeg을 사용해 RTSP 패킷 수신 → 디먹싱 → H.264 디코딩
-                capture = new VideoCapture(_url);
-                if (!capture.IsOpened())
+                fmtCtx = ffmpeg.avformat_alloc_context();
+                if (fmtCtx == null)
                 {
-                    RaiseStatus($"열기 실패: {_url}");
+                    RaiseStatus("avformat_alloc_context 실패");
                     return;
                 }
 
-                RaiseStatus($"연결됨: {_url} ({capture.FrameWidth}x{capture.FrameHeight} @ {capture.Fps:F1} fps)");
+                // RTSP 옵션: TCP 우선(패킷 손실 회피) + 5초 안에 못 열면 실패
+                AVDictionary* opts = null;
+                ffmpeg.av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+                ffmpeg.av_dict_set(&opts, "stimeout", "5000000", 0); // 마이크로초 단위
+                ffmpeg.av_dict_set(&opts, "buffer_size", "1024000", 0);
 
-                mat = new Mat(); // 프레임 버퍼 (매 Read마다 재사용)
-                int consecutiveFailures = 0;
+                // unsafe 컨텍스트에서 필드(fmtCtx)의 주소(&fmtCtx)는 직접 못 잡습니다 (GC가 옮길 수 있는 객체 필드라서) 그래서 복사함
+                AVFormatContext* fmtCtxLocal = fmtCtx;
 
-                // 실제 스트림 fps 기준으로 1초치 프레임 수를 계산
-                // fps를 못 읽으면(0 이하) 30fps로 fallback
-                double streamFps = capture.Fps > 0 ? capture.Fps : 30.0;
-                int maxFailures = (int)Math.Ceiling(streamFps);
+                // 여기서 실제 연결 진행
+                int ret = ffmpeg.avformat_open_input(&fmtCtxLocal, _url, null, &opts);
+                fmtCtx = fmtCtxLocal;
+                if (opts != null)
+                {
+                    ffmpeg.av_dict_free(&opts);
+                }
+                if (ret < 0)
+                {
+                    RaiseStatus($"열기 실패: {_url} ({FfErr(ret)})");
+                    return;
+                }
 
+                // open_input만 하면 SDP에 적힌 정도의 정보만 있고, 코덱 종류·해상도·프로파일 같은 세부 정보는 비어있는 경우가 많음. find_stream_info가 실제 패킷을 몇 개 미리 읽어서 디코더 파라미터를 채워 넣어줍니다.
+                ret = ffmpeg.avformat_find_stream_info(fmtCtx, null);
+                if (ret < 0)
+                {
+                    RaiseStatus($"스트림 정보 조회 실패 ({FfErr(ret)})");
+                    return;
+                }
+
+                // 스트림 인덱스 확정
+                for (int i = 0; i < (int)fmtCtx->nb_streams; i++)
+                {
+                    AVStream* st = fmtCtx->streams[i];
+                    if (st->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO && videoStreamIndex < 0)
+                    {
+                        videoStreamIndex = i;
+                    }
+                    else if (st->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_AUDIO && audioStreamIndex < 0)
+                    {
+                        audioStreamIndex = i;
+                    }
+                }
+
+                bool videoActive = _videoEnabled && videoStreamIndex >= 0 && _videoPacketQueue != null;
+
+                if (videoActive)
+                {
+                    // ---- Video codec open ----
+                    AVStream* vStream = fmtCtx->streams[videoStreamIndex];
+                    AVCodec* vCodec = ffmpeg.avcodec_find_decoder(vStream->codecpar->codec_id);
+                    if (vCodec == null)
+                    {
+                        // 비디오 디코더 못 찾아도 오디오만으로 진행 가능
+                        videoActive = false;
+                    }
+                    else
+                    {
+                        videoCodecCtx = ffmpeg.avcodec_alloc_context3(vCodec);
+                        ffmpeg.avcodec_parameters_to_context(videoCodecCtx, vStream->codecpar);
+                        if (ffmpeg.avcodec_open2(videoCodecCtx, vCodec, null) < 0)
+                        {
+                            ffmpeg.avcodec_free_context(&videoCodecCtx);
+                            videoCodecCtx = null;
+                            videoActive = false;
+                        }
+                    }
+                }
+
+                // ---- Audio codec open (오디오 활성 + 스트림 존재 시) ----
+                bool audioActive = _audioOutput != null && audioStreamIndex >= 0 && _audioPacketQueue != null;
+                if (audioActive)
+                {
+                    AVStream* aStream = fmtCtx->streams[audioStreamIndex];
+                    AVCodec* aCodec = ffmpeg.avcodec_find_decoder(aStream->codecpar->codec_id);
+                    if (aCodec != null)
+                    {
+                        audioCodecCtx = ffmpeg.avcodec_alloc_context3(aCodec);
+                        ffmpeg.avcodec_parameters_to_context(audioCodecCtx, aStream->codecpar);
+                        if (ffmpeg.avcodec_open2(audioCodecCtx, aCodec, null) < 0)
+                        {
+                            // 오디오 코덱 실패해도 영상은 그대로 진행
+                            ffmpeg.avcodec_free_context(&audioCodecCtx);
+                            audioCodecCtx = null;
+                            audioActive = false;
+                        }
+                    }
+                    else
+                    {
+                        audioActive = false;
+                    }
+                }
+
+                if (!videoActive && !audioActive)
+                {
+                    RaiseStatus("열 수 있는 스트림 없음");
+                    return;
+                }
+
+                string sizeText = videoActive ? $"{videoCodecCtx->width}x{videoCodecCtx->height}" : "-";
+
+                RaiseStatus(
+                    $"연결됨: {_url} ({sizeText})" +
+                    (videoActive ? " +Video" : "") +
+                    (audioActive ? " +Audio" : ""));
+
+                // ---- Decoder threads launch ----
+                int videoIdx = videoStreamIndex;
+                if (videoActive)
+                {
+                    AVCodecContext* videoCodecCtxLocal = videoCodecCtx;
+                    _videoThread = new Thread(() => VideoDecodeLoop(videoCodecCtxLocal, ct))
+                    {
+                        IsBackground = true,
+                        Name = $"RtspVideo[{_url}]"
+                    };
+                    _videoThread.Start();
+                }
+
+                if (audioActive)
+                {
+                    AVCodecContext* audioCodecCtxLocal = audioCodecCtx;
+                    _audioThread = new Thread(() => AudioDecodeLoop(audioCodecCtxLocal, ct))
+                    {
+                        IsBackground = true,
+                        Name = $"RtspAudio[{_url}]"
+                    };
+                    _audioThread.Start();
+                }
+
+                // ---- Demux loop ----
+                packet = ffmpeg.av_packet_alloc();
                 while (!ct.IsCancellationRequested)
                 {
-                    // Read: 다음 프레임이 올 때까지 블로킹 (fps에 따라 간격 다름)
-                    // 디코딩 결과는 BGR row-major 포맷으로 mat에 채워짐
-                    if (!capture.Read(mat) || mat.Empty())
+                    ret = ffmpeg.av_read_frame(fmtCtx, packet);
+                    if (ret < 0)
                     {
-                        consecutiveFailures++;
-                        if (consecutiveFailures >= maxFailures)
-                        {
-                            // 1초치 프레임을 연속으로 못 받으면 연결 끊김으로 판단
-                            RaiseStatus("프레임 수신 끊김");
-                            break;
-                        }
-                        Thread.Sleep((int)(1000.0 / streamFps)); // fps에 맞는 대기 시간
-                        continue;
+                        // EOF 또는 끊김
+                        RaiseStatus($"수신 종료 ({FfErr(ret)})");
+                        break;
                     }
 
-                    consecutiveFailures = 0;
+                    if (videoActive && packet->stream_index == videoIdx)
+                    {
+                        // av_packet_clone 으로 디코더에 넘길 사본 생성. 디코더가 av_packet_free 책임.
+                        AVPacket* clone = ffmpeg.av_packet_clone(packet);
+                        if (clone != null)
+                        {
+                            try
+                            {
+                                _videoPacketQueue!.Add((IntPtr)clone, ct);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // CompleteAdding 후 들어옴 → 그냥 free
+                                ffmpeg.av_packet_free(&clone);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                ffmpeg.av_packet_free(&clone);
+                                break;
+                            }
+                        }
+                    }
+                    else if (audioActive && packet->stream_index == audioStreamIndex)
+                    {
+                        AVPacket* clone = ffmpeg.av_packet_clone(packet);
+                        if (clone != null)
+                        {
+                            try
+                            {
+                                _audioPacketQueue!.Add((IntPtr)clone, ct);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                ffmpeg.av_packet_free(&clone);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                ffmpeg.av_packet_free(&clone);
+                                break;
+                            }
+                        }
+                    }
+                    // 다른 스트림(자막 등) 또는 audioActive=false 일 때 오디오 패킷은 그냥 drop
 
-                    int width = mat.Width;
-                    int height = mat.Height;
-                    int channels = mat.Channels(); // 보통 3(BGR), 드물게 4(BGRA)
-                    int byteCount = width * height * channels;
-
-                    // mat.Data: 네이티브(C++) 메모리 주소 (IntPtr)
-                    // Marshal.Copy: 네이티브 메모리 → 관리 메모리(byte[])로 복사
-                    // 복사하지 않으면 다음 Read()에서 mat 버퍼가 덮어써져 데이터가 깨짐
-                    var bgr = new byte[byteCount];
-                    Marshal.Copy(mat.Data, bgr, 0, byteCount);
-
-                    var frame = new RtspFrame(bgr, width, height, DateTime.UtcNow);
-
-                    // 영상 표시용: 모든 프레임을 이벤트로 즉시 알림 (구독자가 Dispatcher로 마샬링할 책임)
-                    FrameCaptured?.Invoke(this, frame);
-
-                    // 추론용: 1슬롯 큐에 넣음. DropOldest 정책이라 이전 프레임은 자동 폐기
-                    // → 추론 루프가 느려도 항상 최신 프레임만 처리하게 됨
-                    _channel.Writer.TryWrite(frame);
+                    ffmpeg.av_packet_unref(packet);
                 }
             }
             catch (Exception ex)
             {
-                RaiseStatus($"캡처 오류: {ex.Message}");
+                RaiseStatus($"디먹서 오류: {ex.Message}");
             }
             finally
             {
-                mat?.Dispose();
-                capture?.Dispose();
-                _channel.Writer.TryComplete(); // 채널을 닫아 추론 루프의 ReadAllAsync가 정상 종료되게 함
-                RaiseStatus("정지");
+                if (needFinalize)
+                {
+                    if (packet != null)
+                    {
+                        ffmpeg.av_packet_free(&packet);
+                    }
+
+                    // 디코더 큐 닫고 스레드 종료 대기는 Stop() 에서 처리.
+                    // 여기서는 디먹서가 스스로 끝나는 경우(EOF 등)에 대비해 큐만 닫아준다.
+                    try
+                    {
+                        _videoPacketQueue?.CompleteAdding();
+                    }
+                    catch (ObjectDisposedException) { }
+
+                    try
+                    {
+                        _audioPacketQueue?.CompleteAdding();
+                    }
+                    catch (ObjectDisposedException) { }
+
+                    if (videoCodecCtx != null)
+                    {
+                        ffmpeg.avcodec_free_context(&videoCodecCtx);
+                    }
+                    if (audioCodecCtx != null)
+                    {
+                        ffmpeg.avcodec_free_context(&audioCodecCtx);
+                    }
+                    if (fmtCtx != null)
+                    {
+                        ffmpeg.avformat_close_input(&fmtCtx);
+                    }
+
+                    _channel.Writer.TryComplete();
+                    RaiseStatus("정지");
+                }
             }
+        }
+
+        // ========== Thread 2 : Video Decoder ==========
+
+        private void VideoDecodeLoop(AVCodecContext* codecCtx, CancellationToken ct)
+        {
+            /*
+             
+             비디오:                   
+            큐: H.264 압축 (~50KB)    
+              ↓ avcodec_send_packet   
+              ↓ avcodec_receive_frame 
+            디코더 출력: YUV420P (3MB)
+              ↓ sws_scale (YUV→BGR)   
+            변환 결과: BGR24 (6MB)    
+
+             */
+
+            BlockingCollection<IntPtr>? queue = _videoPacketQueue;
+            if (queue == null)
+            {
+                return;
+            }
+
+            AVFrame* frame = ffmpeg.av_frame_alloc();
+            SwsContext* swsCtx = null;
+            byte* dstBuffer = null;
+            int dstBufSize = 0;
+            byte_ptrArray4 dstData = default;
+            int_array4 dstLinesize = default;
+            int knownW = 0, knownH = 0;
+
+            try
+            {
+                // ffmpeg.avcodec_send_packet / avcodec_receive_frame 의 일반적인 루프 구조. 패킷 하나 보낼 때마다 프레임을 여러 개 받을 수 있음 (B-프레임 등).
+                foreach (IntPtr pktPtr in queue.GetConsumingEnumerable(ct))
+                {
+                    AVPacket* pkt = (AVPacket*)pktPtr;
+                    try
+                    {
+                        // 패킷을 디코더에 보냄. 내부 버퍼가 꽉 차면 EAGAIN 반환 → 프레임을 받아서 버퍼 비워주고 다시 시도.
+                        if (ffmpeg.avcodec_send_packet(codecCtx, pkt) < 0)
+                        {
+                            continue;
+                        }
+
+                        while (true)
+                        {
+                            // 디코더에서 프레임을 받음. 아직 처리할 프레임이 없으면 EAGAIN, 스트림 끝나면 EOF 반환.
+                            int ret = ffmpeg.avcodec_receive_frame(codecCtx, frame); // 비디오의 경우: frame->data[0]=Y평면, data[1]=U평면, data[2]=V평면, frame->width/height/format 등
+                            if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
+                            {
+                                break;
+                            }
+                            if (ret < 0)
+                            {
+                                break;
+                            }
+
+                            int w = frame->width;
+                            int h = frame->height;
+
+                            // 첫 프레임 또는 해상도 변경 시 sws context 재할당
+                            if (swsCtx == null || w != knownW || h != knownH)
+                            {
+                                if (swsCtx != null)
+                                {
+                                    ffmpeg.sws_freeContext(swsCtx);
+                                    swsCtx = null;
+                                }
+                                if (dstBuffer != null)
+                                {
+                                    ffmpeg.av_free(dstBuffer);
+                                    dstBuffer = null;
+                                }
+
+                                // SWS_BILINEAR == 2 (libswscale.h)
+                                swsCtx = ffmpeg.sws_getContext(
+                                    w, h, (AVPixelFormat)frame->format,
+                                    w, h, AVPixelFormat.AV_PIX_FMT_BGR24,
+                                    2, null, null, null);
+
+                                //  BGR24 한 프레임에 필요한 바이트 수 계산
+                                dstBufSize = ffmpeg.av_image_get_buffer_size(
+                                    AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
+                                dstBuffer = (byte*)ffmpeg.av_malloc((ulong)dstBufSize);
+
+                                // dstData[0]에 dstBuffer 시작 주소를, dstLinesize[0]에 한 행의 바이트 수(=w*3)를 채워줌. single-plane(BGR24)이라 [0]만 쓰임
+                                ffmpeg.av_image_fill_arrays(
+                                    ref dstData, ref dstLinesize, dstBuffer,
+                                    AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
+
+                                knownW = w;
+                                knownH = h;
+                            }
+
+                            // "색공간 변환기 + 화면용 포맷 정리기"
+                            // 압축 풀린 픽셀의 모양을 바꾸는 작업
+                            ffmpeg.sws_scale(
+                                swsCtx,
+                                frame->data, frame->linesize,
+                                0, h,
+                                dstData, dstLinesize);
+
+                            // 네이티브 버퍼 → 관리 byte[] 로 복사 (다음 프레임이 덮어쓰기 전에)
+                            byte[] managed = new byte[dstBufSize];
+                            Marshal.Copy((IntPtr)dstBuffer, managed, 0, dstBufSize);
+
+                            var rtspFrame = new RtspFrame(managed, w, h, DateTime.UtcNow);
+
+                            FrameCaptured?.Invoke(this, rtspFrame);
+                            _channel.Writer.TryWrite(rtspFrame);
+
+                            ffmpeg.av_frame_unref(frame);
+                        }
+                    }
+                    finally
+                    {
+                        ffmpeg.av_packet_free(&pkt);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                RaiseStatus($"비디오 디코더 오류: {ex.Message}");
+            }
+            finally
+            {
+                if (swsCtx != null)
+                {
+                    ffmpeg.sws_freeContext(swsCtx);
+                }
+                if (dstBuffer != null)
+                {
+                    ffmpeg.av_free(dstBuffer);
+                }
+                ffmpeg.av_frame_free(&frame);
+            }
+        }
+
+        // ========== Thread 3 : Audio Decoder ==========
+
+        private void AudioDecodeLoop(AVCodecContext* codecCtx, CancellationToken ct)
+        {
+            /*
+             
+              오디오:                   
+                 큐: AAC 압축 (~700B)      
+                   ↓ avcodec_send_packet   
+                   ↓ avcodec_receive_frame 
+                 디코더 출력: FLTP (8KB)   
+                   ↓ swr_convert (FLTP→S16)
+                 변환 결과: S16 (4KB)      
+
+             */
+
+            BlockingCollection<IntPtr>? queue = _audioPacketQueue;
+            IAudioOutput? output = _audioOutput;
+            if (queue == null || output == null)
+            {
+                return;
+            }
+
+            AVFrame* frame = ffmpeg.av_frame_alloc();
+            SwrContext* swrCtx = null;
+
+            // 출력 포맷 고정: 16-bit PCM, stereo, 입력과 같은 sample rate (변환 비용 최소화)
+            const AVSampleFormat outFormat = AVSampleFormat.AV_SAMPLE_FMT_S16;
+            const int outChannels = 2;
+            int outSampleRate = 0;
+            AVChannelLayout outChLayout = default;
+            ffmpeg.av_channel_layout_default(&outChLayout, outChannels);
+
+            // 루프 밖에서 1회만 할당. swr_convert 가 인터리브드 출력 포맷이라 평면 1개로 충분.
+            byte** outArr = stackalloc byte*[1];
+
+            try
+            {
+                foreach (IntPtr pktPtr in queue.GetConsumingEnumerable(ct)) // 여기 들어있는 건 아직 AAC 압축 패킷 (~700바이트)
+                {
+                    AVPacket* pkt = (AVPacket*)pktPtr;
+                    try
+                    {
+                        if (ffmpeg.avcodec_send_packet(codecCtx, pkt) < 0)
+                        {
+                            continue;
+                        }
+
+                        while (true)
+                        {
+                            // 이 호출이 끝나야 frame에 FLTP raw 샘플이 들어옴
+                            int ret = ffmpeg.avcodec_receive_frame(codecCtx, frame);
+                            if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
+                            {
+                                break;
+                            }
+                            if (ret < 0)
+                            {
+                                break;
+                            }
+
+                            // 첫 프레임 기준으로 swr 초기화
+                            if (swrCtx == null)
+                            {
+                                outSampleRate = frame->sample_rate;
+                                AVChannelLayout inChLayout = frame->ch_layout;
+                                SwrContext* swrLocal = null;
+                                int alloc = ffmpeg.swr_alloc_set_opts2(
+                                    &swrLocal,
+                                    &outChLayout, outFormat, outSampleRate,
+                                    &inChLayout, (AVSampleFormat)frame->format, frame->sample_rate,
+                                    0, null);
+                                swrCtx = swrLocal;
+                                if (alloc < 0 || swrCtx == null)
+                                {
+                                    break;
+                                }
+                                if (ffmpeg.swr_init(swrCtx) < 0)
+                                {
+                                    break;
+                                }
+                            }
+
+
+                            // 입력과 출력이 44.1kHz → 출력 48kHz로 다를 경우에 필요한 부분
+                            // 변환 후 샘플 수 추정 (delay 포함해서 안전 마진)
+                            long delay = ffmpeg.swr_get_delay(swrCtx, frame->sample_rate); // swr 내부에 남아있는 분수 샘플 (rate 같으면 0)
+                            int outSamples = (int)ffmpeg.av_rescale_rnd(
+                                delay + frame->nb_samples,  // 비디오의 1프레임당 크기를 구한 것처럼 오디오도 1프레임당 크기를 구하려고 하는것
+                                outSampleRate, frame->sample_rate, AVRounding.AV_ROUND_UP);
+
+                            int outBytesPerSample = ffmpeg.av_get_bytes_per_sample(outFormat); // 2 (S16)
+                            int maxOutBytes = outSamples * outChannels * outBytesPerSample;
+                            byte[] outBuf = new byte[maxOutBytes];
+
+                            int converted;
+                            fixed (byte* outBufPtr = outBuf)
+                            {
+                                outArr[0] = outBufPtr;
+
+                                // 리샘플러 에게 변환 결과를 받아옴
+                                // 여기서 FLTP → S16 변환 ( Float [-1.0~1.0] → Int16 [-32768~32767] 변환)
+                                converted = ffmpeg.swr_convert( 
+                                    swrCtx,
+                                    outArr, outSamples, // 출력 버퍼, 변환 후 최대 샘플 수
+                                    frame->extended_data, frame->nb_samples); // 입력 버퍼, 변환할 샘플 수
+                            }
+
+                            if (converted > 0)
+                            {
+                                int actualBytes = converted * outChannels * outBytesPerSample;
+                                byte[] trimmed;
+                                if (actualBytes == outBuf.Length)
+                                {
+                                    trimmed = outBuf;
+                                }
+                                else
+                                {
+                                    trimmed = new byte[actualBytes];
+                                    Buffer.BlockCopy(outBuf, 0, trimmed, 0, actualBytes);
+                                }
+                                output.Push(new AudioFrame(trimmed, outSampleRate, outChannels));
+                            }
+
+                            ffmpeg.av_frame_unref(frame);
+                        }
+                    }
+                    finally
+                    {
+                        ffmpeg.av_packet_free(&pkt);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                RaiseStatus($"오디오 디코더 오류: {ex.Message}");
+            }
+            finally
+            {
+                if (swrCtx != null)
+                {
+                    SwrContext* tmp = swrCtx;
+                    ffmpeg.swr_free(&tmp);
+                }
+                ffmpeg.av_channel_layout_uninit(&outChLayout);
+                ffmpeg.av_frame_free(&frame);
+            }
+        }
+
+        // ========== helpers ==========
+
+        private static void DrainAndFreePackets(BlockingCollection<IntPtr>? queue)
+        {
+            if (queue == null)
+            {
+                return;
+            }
+            while (queue.TryTake(out IntPtr ptr))
+            {
+                AVPacket* pkt = (AVPacket*)ptr;
+                ffmpeg.av_packet_free(&pkt);
+            }
+        }
+
+        private static string FfErr(int err)
+        {
+            const int bufSize = 256;
+            byte* buf = stackalloc byte[bufSize];
+            ffmpeg.av_strerror(err, buf, (ulong)bufSize);
+            return Marshal.PtrToStringAnsi((IntPtr)buf) ?? err.ToString();
         }
 
         private void RaiseStatus(string message)
