@@ -78,7 +78,9 @@
                                     <Button Content="🔊 ON" Command="{Binding StartAllAudioCommand}" Width="80" Height="26"/>
                                     <Button Content="🔊 OFF" Command="{Binding StopAllAudioCommand}" Width="80" Height="26" Margin="6,0,0,0"/>
                                 </StackPanel>
-                                <Button Content="⏹ 전체 정지(영상+소리)" Command="{Binding StopAllCommand}" Height="26" Margin="0,6,0,0"
+                                <Button Content="▶ 전체 시작(영상+소리)" Command="{Binding StartAllCommand}" Height="26" Margin="0,6,0,0"
+                                        HorizontalAlignment="Stretch"/>
+                                <Button Content="⏹ 전체 정지(영상+소리)" Command="{Binding StopAllCommand}" Height="26" Margin="0,4,0,0"
                                         HorizontalAlignment="Stretch"/>
                                 <Button Content="✕ 전체 삭제" Command="{Binding RemoveAllCommand}" Height="26" Margin="0,4,0,0"
                                         HorizontalAlignment="Stretch" Foreground="#A00"/>
@@ -130,6 +132,9 @@
                                                               Content="🔊" Width="28" Height="22" FontSize="11" Padding="0"
                                                               Margin="4,0,0,0"
                                                               ToolTip="소리 ON/OFF"/>
+                                                <Button Content="▶" Command="{Binding StartCommand}"
+                                                        Width="22" Height="22" FontSize="10" Padding="0" Margin="4,0,0,0"
+                                                        ToolTip="이 스트림 시작(영상+소리)"/>
                                                 <Button Content="⏹" Command="{Binding StopCommand}"
                                                         Width="22" Height="22" FontSize="10" Padding="0" Margin="4,0,0,0"
                                                         ToolTip="이 스트림 정지(영상+소리)"/>
@@ -214,6 +219,12 @@
                                                         Background="Transparent" Foreground="White" BorderThickness="0"
                                                         Margin="0,0,4,0"
                                                         ToolTip="이 스트림 정지(영상+소리)"/>
+                                                <Button DockPanel.Dock="Right"
+                                                        Content="▶" Command="{Binding StartCommand}"
+                                                        Width="28" Height="22" FontSize="11" Padding="0"
+                                                        Background="Transparent" Foreground="White" BorderThickness="0"
+                                                        Margin="0,0,4,0"
+                                                        ToolTip="이 스트림 시작(영상+소리)"/>
                                                 <ToggleButton DockPanel.Dock="Right"
                                                               IsChecked="{Binding IsAudioEnabled, Mode=OneWay}"
                                                               Command="{Binding ToggleAudioCommand}"

@@ -43,6 +43,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             StopAllVideoCommand = new RelayCommand(() => SetAllVideo(false));
             StartAllAudioCommand = new RelayCommand(() => SetAllAudio(true));
             StopAllAudioCommand = new RelayCommand(() => SetAllAudio(false));
+            StartAllCommand = new RelayCommand(StartAll);
             StopAllCommand = new RelayCommand(StopAll);
             RemoveAllCommand = new RelayCommand(RemoveAll);
         }
@@ -55,6 +56,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         public RelayCommand StopAllVideoCommand { get; }
         public RelayCommand StartAllAudioCommand { get; }
         public RelayCommand StopAllAudioCommand { get; }
+        public RelayCommand StartAllCommand { get; }
         public RelayCommand StopAllCommand { get; }
         public RelayCommand RemoveAllCommand { get; }
 
@@ -224,6 +226,15 @@ namespace Vision.MultiStream.Inference.ViewModels
             foreach (var s in Streams)
             {
                 s.SetAudio(enabled);
+            }
+        }
+
+        private void StartAll()
+        {
+            foreach (var s in Streams)
+            {
+                s.SetVideo(true);
+                s.SetAudio(true);
             }
         }
 

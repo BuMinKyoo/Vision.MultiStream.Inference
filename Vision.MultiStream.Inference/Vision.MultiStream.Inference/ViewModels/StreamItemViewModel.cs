@@ -70,6 +70,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             ToggleVideoCommand = new RelayCommand(ToggleVideo, () => !string.IsNullOrWhiteSpace(RtspUrl));
             ToggleAudioCommand = new RelayCommand(ToggleAudio, () => !string.IsNullOrWhiteSpace(RtspUrl));
+            StartCommand = new RelayCommand(StartAll, () => !string.IsNullOrWhiteSpace(RtspUrl));
             StopCommand = new RelayCommand(StopAll, () => IsActive);
             RemoveCommand = new RelayCommand(() =>
             {
@@ -82,6 +83,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         public RelayCommand ToggleVideoCommand { get; }
         public RelayCommand ToggleAudioCommand { get; }
+        public RelayCommand StartCommand { get; }
         public RelayCommand StopCommand { get; }
         public RelayCommand RemoveCommand { get; }
 
@@ -361,6 +363,21 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void ToggleAudio()
         {
             SetAudio(!_isAudioEnabled);
+        }
+
+        private void StartAll()
+        {
+            bool changed = !_isVideoEnabled || !_isAudioEnabled;
+            _isVideoEnabled = true;
+            _isAudioEnabled = true;
+            if (changed)
+            {
+                OnPropertyChanged(nameof(IsVideoEnabled));
+                OnPropertyChanged(nameof(IsAudioEnabled));
+                OnPropertyChanged(nameof(IsActive));
+                StopCommand.RaiseCanExecuteChanged();
+                ApplyState();
+            }
         }
 
         private void StopAll()
