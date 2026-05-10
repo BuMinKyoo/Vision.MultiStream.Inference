@@ -22,6 +22,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _newName = string.Empty;
         private string _newRtspUrl = "rtsp://localhost:8554/cam1";
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
+        private bool _newUseInference = true;
         private LayoutMode _layout = LayoutMode.Auto;
         private int _autoCounter = 1;
 
@@ -43,6 +44,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             StopAllVideoCommand = new RelayCommand(() => SetAllVideo(false));
             StartAllAudioCommand = new RelayCommand(() => SetAllAudio(true));
             StopAllAudioCommand = new RelayCommand(() => SetAllAudio(false));
+            StartAllInferenceCommand = new RelayCommand(() => SetAllInference(true));
+            StopAllInferenceCommand = new RelayCommand(() => SetAllInference(false));
             StartAllCommand = new RelayCommand(StartAll);
             StopAllCommand = new RelayCommand(StopAll);
             RemoveAllCommand = new RelayCommand(RemoveAll);
@@ -56,6 +59,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         public RelayCommand StopAllVideoCommand { get; }
         public RelayCommand StartAllAudioCommand { get; }
         public RelayCommand StopAllAudioCommand { get; }
+        public RelayCommand StartAllInferenceCommand { get; }
+        public RelayCommand StopAllInferenceCommand { get; }
         public RelayCommand StartAllCommand { get; }
         public RelayCommand StopAllCommand { get; }
         public RelayCommand RemoveAllCommand { get; }
@@ -141,6 +146,20 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        public bool NewUseInference
+        {
+            get => _newUseInference;
+            set
+            {
+                if (_newUseInference == value)
+                {
+                    return;
+                }
+                _newUseInference = value;
+                OnPropertyChanged();
+            }
+        }
+
         public LayoutMode Layout
         {
             get => _layout;
@@ -170,7 +189,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -189,6 +208,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
 
             InferenceDevice device = dialog.SelectedDevice;
+            bool inferenceEnabled = dialog.SelectedInferenceEnabled;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -196,14 +216,14 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device)
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled)
         {
-            return new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested);
+            return new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled);
         }
 
         private void OnRemoveRequested(StreamItemViewModel item)
@@ -226,6 +246,14 @@ namespace Vision.MultiStream.Inference.ViewModels
             foreach (var s in Streams)
             {
                 s.SetAudio(enabled);
+            }
+        }
+
+        private void SetAllInference(bool enabled)
+        {
+            foreach (var s in Streams)
+            {
+                s.SetInference(enabled);
             }
         }
 

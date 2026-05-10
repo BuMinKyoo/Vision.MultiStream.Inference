@@ -20,11 +20,12 @@ namespace Vision.MultiStream.Inference.ViewModels
     /// 멀티스트림에서 1개 RTSP 스트림을 표현하는 ViewModel.
     /// 책임: 자기 자신의 RtspFrameSource + 추론 루프 + 오디오 출력 수명 관리.
     ///
-    /// 영상/소리 두 개의 독립 토글:
-    ///   - IsVideoEnabled : 비디오 디코딩 + 표시 + 추론
-    ///   - IsAudioEnabled : 오디오 디코딩 + 스피커 출력
-    /// 두 토글은 독립적으로 ON/OFF 가능. 둘 다 OFF 면 RTSP 연결 자체를 끊음.
-    /// 한쪽만 토글하면 RTSP 연결을 잠깐 재수립한다 (간단함을 위한 의도적 선택).
+    /// 세 개의 독립 토글:
+    ///   - IsVideoEnabled     : 비디오 디코딩 + 표시
+    ///   - IsAudioEnabled     : 오디오 디코딩 + 스피커 출력
+    ///   - IsInferenceEnabled : YOLO 추론 루프 ON/OFF (비디오가 켜져 있을 때만 의미 있음)
+    /// 비디오/소리 토글은 RTSP 재구성을 일으킨다 (디코더 구성 변경).
+    /// 추론 토글은 RTSP 를 건드리지 않고 추론 루프만 start/stop 한다.
     /// </summary>
     public sealed class StreamItemViewModel : BaseViewModel, IDisposable
     {
@@ -37,6 +38,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private InferenceDevice _device;
         private bool _isVideoEnabled;
         private bool _isAudioEnabled;
+        private bool _isInferenceEnabled;
         private string _statusMessage = "대기";
         private WriteableBitmap? _imageSource;
         private int _imageWidth;
@@ -48,7 +50,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private double _postprocessMs;
 
         private RtspFrameSource? _source;
-        private CancellationTokenSource? _cts;
+        private CancellationTokenSource? _inferenceCts;
         private Task? _inferenceTask;
 
         private readonly FpsCounter _displayFpsCounter = new();
@@ -59,17 +61,20 @@ namespace Vision.MultiStream.Inference.ViewModels
             string rtspUrl,
             InferenceDevice device,
             Func<InferenceDevice, IRtspFrameDetector> detectorResolver,
-            Action<StreamItemViewModel> onRemoveRequested)
+            Action<StreamItemViewModel> onRemoveRequested,
+            bool initialInferenceEnabled = true)
         {
             _name = name;
             _rtspUrl = rtspUrl;
             _device = device;
+            _isInferenceEnabled = initialInferenceEnabled;
             _detectorResolver = detectorResolver;
             _onRemoveRequested = onRemoveRequested;
             _dispatcher = Application.Current.Dispatcher;
 
             ToggleVideoCommand = new RelayCommand(ToggleVideo, () => !string.IsNullOrWhiteSpace(RtspUrl));
             ToggleAudioCommand = new RelayCommand(ToggleAudio, () => !string.IsNullOrWhiteSpace(RtspUrl));
+            ToggleInferenceCommand = new RelayCommand(ToggleInference);
             StartCommand = new RelayCommand(StartAll, () => !string.IsNullOrWhiteSpace(RtspUrl));
             StopCommand = new RelayCommand(StopAll, () => IsActive);
             RemoveCommand = new RelayCommand(() =>
@@ -83,6 +88,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         public RelayCommand ToggleVideoCommand { get; }
         public RelayCommand ToggleAudioCommand { get; }
+        public RelayCommand ToggleInferenceCommand { get; }
         public RelayCommand StartCommand { get; }
         public RelayCommand StopCommand { get; }
         public RelayCommand RemoveCommand { get; }
@@ -206,6 +212,20 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(IsActive));
                 StopCommand.RaiseCanExecuteChanged();
+            }
+        }
+
+        public bool IsInferenceEnabled
+        {
+            get => _isInferenceEnabled;
+            private set
+            {
+                if (_isInferenceEnabled == value)
+                {
+                    return;
+                }
+                _isInferenceEnabled = value;
+                OnPropertyChanged();
             }
         }
 
@@ -355,6 +375,39 @@ namespace Vision.MultiStream.Inference.ViewModels
             ApplyState();
         }
 
+        // 추론 토글은 RTSP 재구성 없이 추론 루프만 start/stop 한다.
+        public void SetInference(bool enabled)
+        {
+            if (_isInferenceEnabled == enabled)
+            {
+                return;
+            }
+            _isInferenceEnabled = enabled;
+            OnPropertyChanged(nameof(IsInferenceEnabled));
+
+            if (_source == null || !_isVideoEnabled)
+            {
+                return;
+            }
+
+            if (enabled)
+            {
+                StartInferenceLoop();
+            }
+            else
+            {
+                StopInferenceLoop();
+                _dispatcher.BeginInvoke(() =>
+                {
+                    Detections.Clear();
+                    InferenceFps = 0;
+                    PreprocessMs = 0;
+                    InferenceMs = 0;
+                    PostprocessMs = 0;
+                });
+            }
+        }
+
         private void ToggleVideo()
         {
             SetVideo(!_isVideoEnabled);
@@ -363,6 +416,11 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void ToggleAudio()
         {
             SetAudio(!_isAudioEnabled);
+        }
+
+        private void ToggleInference()
+        {
+            SetInference(!_isInferenceEnabled);
         }
 
         private void StartAll()
@@ -445,10 +503,9 @@ namespace Vision.MultiStream.Inference.ViewModels
                 IAudioOutput? audioOutput = wantAudio ? new WasapiAudioOutput() : null;
                 _source.Start(wantVideo, audioOutput);
 
-                if (wantVideo)
+                if (wantVideo && _isInferenceEnabled)
                 {
-                    _cts = new CancellationTokenSource();
-                    _inferenceTask = Task.Run(() => InferenceLoopAsync(_cts.Token));
+                    StartInferenceLoop();
                 }
 
                 StatusMessage = "연결 중...";
@@ -460,11 +517,38 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        // RTSP 는 그대로 두고 추론 루프만 가동한다. ApplyState 와 SetInference(true) 양쪽에서 사용.
+        private void StartInferenceLoop()
+        {
+            if (_inferenceTask != null)
+            {
+                return;
+            }
+            _inferenceCts = new CancellationTokenSource();
+            CancellationToken token = _inferenceCts.Token;
+            _inferenceTask = Task.Run(() => InferenceLoopAsync(token));
+        }
+
+        // 추론 루프만 정지. RTSP / 디코더는 건드리지 않는다.
+        private void StopInferenceLoop()
+        {
+            try
+            {
+                _inferenceCts?.Cancel();
+            }
+            catch
+            {
+            }
+            _inferenceTask = null;
+            _inferenceCts?.Dispose();
+            _inferenceCts = null;
+        }
+
         private void TearDownSource()
         {
             try
             {
-                _cts?.Cancel();
+                StopInferenceLoop();
 
                 if (_source != null)
                 {
@@ -474,10 +558,6 @@ namespace Vision.MultiStream.Inference.ViewModels
                     _source.Dispose();
                     _source = null;
                 }
-
-                _inferenceTask = null;
-                _cts?.Dispose();
-                _cts = null;
             }
             catch
             {

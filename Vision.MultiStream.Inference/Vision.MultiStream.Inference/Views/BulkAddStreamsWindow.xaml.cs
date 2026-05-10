@@ -13,6 +13,7 @@ namespace Vision.MultiStream.Inference.Views
         }
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
+        public bool SelectedInferenceEnabled { get; private set; } = true;
 
         private string[] _urls = Array.Empty<string>();
 
@@ -35,6 +36,8 @@ namespace Vision.MultiStream.Inference.Views
             {
                 SelectedDevice = InferenceDevice.Cpu;
             }
+
+            SelectedInferenceEnabled = InferenceCheck.IsChecked == true;
 
             DialogResult = true;
             Close();
