@@ -54,8 +54,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
                     var format = new WaveFormat(_sampleRate, 16, _channels);
                     _buffer = new BufferedWaveProvider(format)
                     {
-                        // 1초치 버퍼면 충분. 더 크면 lag, 더 작으면 jitter 시 끊김.
-                        BufferDuration = TimeSpan.FromMilliseconds(100),
+                        BufferDuration = TimeSpan.FromMilliseconds(2000),
                         DiscardOnBufferOverflow = true
                     };
                     _waveOut = new WaveOutEvent

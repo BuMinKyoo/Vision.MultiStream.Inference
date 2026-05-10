@@ -8,12 +8,13 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
     /// </summary>
     public sealed class RtspFrame
     {
-        public RtspFrame(byte[] bgrPixels, int width, int height, DateTime capturedAt)
+        public RtspFrame(byte[] bgrPixels, int width, int height, DateTime capturedAt, double ptsSeconds)
         {
             BgrPixels = bgrPixels;
             Width = width;
             Height = height;
             CapturedAt = capturedAt;
+            PtsSeconds = ptsSeconds;
         }
 
         public byte[] BgrPixels { get; }
@@ -23,5 +24,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         public int Height { get; }
 
         public DateTime CapturedAt { get; }
+
+        // PTS 가 NOPTS 또는 미지원이면 double.NaN.
+        public double PtsSeconds { get; }
     }
 }

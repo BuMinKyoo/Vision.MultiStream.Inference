@@ -48,6 +48,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private const int VideoQueueCapacity = 4;
         private const int AudioQueueCapacity = 32;
 
+        // A/V 동기화 마스터 클럭 — 비디오 첫 프레임에서 anchor.
+        private readonly MediaClock _clock = new();
+
         public RtspFrameSource(string rtspUrl)
         {
             _url = rtspUrl;
@@ -84,6 +87,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
             _videoEnabled = videoEnabled;
             _audioOutput = audioOutput;
+            _clock.Reset(); // 새 세션 시작이므로 클럭 초기화
             _cts = new CancellationTokenSource();
 
             if (_videoEnabled)
@@ -272,7 +276,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 if (videoActive)
                 {
                     AVCodecContext* videoCodecCtxLocal = videoCodecCtx;
-                    _videoThread = new Thread(() => VideoDecodeLoop(videoCodecCtxLocal, ct))
+                    AVRational vTimeBase = fmtCtx->streams[videoStreamIndex]->time_base;
+                    _videoThread = new Thread(() => VideoDecodeLoop(videoCodecCtxLocal, vTimeBase, ct))
                     {
                         IsBackground = true,
                         Name = $"RtspVideo[{_url}]"
@@ -283,7 +288,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 if (audioActive)
                 {
                     AVCodecContext* audioCodecCtxLocal = audioCodecCtx;
-                    _audioThread = new Thread(() => AudioDecodeLoop(audioCodecCtxLocal, ct))
+                    AVRational aTimeBase = fmtCtx->streams[audioStreamIndex]->time_base;
+                    bool videoIsActiveCapture = videoActive; // 영상 디코더가 떠 있는지 → 오디오 측 anchor 분기 결정
+                    _audioThread = new Thread(() => AudioDecodeLoop(audioCodecCtxLocal, aTimeBase, videoIsActiveCapture, ct))
                     {
                         IsBackground = true,
                         Name = $"RtspAudio[{_url}]"
@@ -398,7 +405,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         // ========== Thread 2 : Video Decoder ==========
 
-        private void VideoDecodeLoop(AVCodecContext* codecCtx, CancellationToken ct)
+        private void VideoDecodeLoop(AVCodecContext* codecCtx, AVRational timeBase, CancellationToken ct)
         {
             /*
              
@@ -453,6 +460,34 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 break;
                             }
 
+                            // ===== PTS 게이트 (Phase 2) =====
+                            // 첫 프레임에서 anchor. 이후 너무 늦으면 drop, 너무 이르면 sleep.
+                            double ptsSeconds = PtsToSeconds(frame->pts, timeBase);
+                            if (!double.IsNaN(ptsSeconds))
+                            {
+                                if (!_clock.IsAnchored)
+                                {
+                                    _clock.Anchor(ptsSeconds);
+                                }
+
+                                TimeSpan delay = _clock.GetDelay(ptsSeconds);
+                                if (delay < TimeSpan.FromMilliseconds(-100))
+                                {
+                                    // 너무 늦음 → drop (sws_scale 비용도 절약)
+                                    ffmpeg.av_frame_unref(frame);
+                                    continue;
+                                }
+                                if (delay > TimeSpan.FromMilliseconds(5))
+                                {
+                                    // 너무 이름 → 출력 시점까지 대기 (cancel 시 즉시 빠져나감)
+                                    if (ct.WaitHandle.WaitOne(delay))
+                                    {
+                                        ffmpeg.av_frame_unref(frame);
+                                        return;
+                                    }
+                                }
+                            }
+
                             int w = frame->width;
                             int h = frame->height;
 
@@ -502,7 +537,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                             byte[] managed = new byte[dstBufSize];
                             Marshal.Copy((IntPtr)dstBuffer, managed, 0, dstBufSize);
 
-                            var rtspFrame = new RtspFrame(managed, w, h, DateTime.UtcNow);
+                            var rtspFrame = new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds);
 
                             FrameCaptured?.Invoke(this, rtspFrame);
                             _channel.Writer.TryWrite(rtspFrame);
@@ -539,7 +574,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         // ========== Thread 3 : Audio Decoder ==========
 
-        private void AudioDecodeLoop(AVCodecContext* codecCtx, CancellationToken ct)
+        private void AudioDecodeLoop(AVCodecContext* codecCtx, AVRational timeBase, bool videoActive, CancellationToken ct)
         {
             /*
              
@@ -658,7 +693,61 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                     trimmed = new byte[actualBytes];
                                     Buffer.BlockCopy(outBuf, 0, trimmed, 0, actualBytes);
                                 }
-                                output.Push(new AudioFrame(trimmed, outSampleRate, outChannels));
+
+                                double ptsSeconds = PtsToSeconds(frame->pts, timeBase);
+
+                                // ===== Phase 3: A/V 동기화 (오디오 측) =====
+                                // 영상이 켜져있으면 영상 첫 프레임이 anchor 할 때까지 오디오는 drop.
+                                // 영상이 꺼져있으면 오디오가 직접 anchor (audio-only 모드).
+                                bool shouldPush = true;
+                                if (!_clock.IsAnchored)
+                                {
+                                    // videoActive이 안됬다는 것은 IsAnchored가 만들어 지지 않았다는 것
+                                    if (!videoActive && !double.IsNaN(ptsSeconds))
+                                    {
+                                        // 오디오 anchor: 영상이 없으므로 오디오 첫 프레임으로 anchor. PTS 없는 프레임은 drop (동기화 불가)
+                                        _clock.Anchor(ptsSeconds);
+                                    }
+                                    else
+                                    {
+                                        shouldPush = false; // 비디오 anchor 대기 또는 PTS 미지원 → drop
+                                    }
+                                }
+                                else if (!double.IsNaN(ptsSeconds) && ptsSeconds < _clock.FirstPtsSeconds)
+                                {
+                                    shouldPush = false; // 영상 시작점보다 앞선 오디오 → drop
+                                }
+
+                                // ===== Phase 4: PTS 기반 매-push 게이팅 =====
+                                // 매 푸시가 "PTS 시점 - 50ms" 에 일어나도록 sleep.
+                                // → BufferedWaveProvider 깊이가 ~50ms 헤드룸으로 유지되어
+                                //    영상과 오디오가 wall clock 기준 같은 PTS 시점에 출력됨.
+                                if (shouldPush && _clock.IsAnchored && !double.IsNaN(ptsSeconds))
+                                {
+                                    TimeSpan ptsDelay = _clock.GetDelay(ptsSeconds);
+                                    if (ptsDelay < TimeSpan.FromMilliseconds(-100))
+                                    {
+                                        shouldPush = false; // 너무 늦음 → drop
+                                    }
+                                    else
+                                    {
+                                        // 50ms 헤드룸: PTS 시점보다 50ms 일찍 push (underrun 방지)
+                                        TimeSpan adjusted = ptsDelay - TimeSpan.FromMilliseconds(50);
+                                        if (adjusted > TimeSpan.FromMilliseconds(5))
+                                        {
+                                            if (ct.WaitHandle.WaitOne(adjusted))
+                                            {
+                                                ffmpeg.av_frame_unref(frame);
+                                                return; // cancel 시 즉시 정리
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (shouldPush)
+                                {
+                                    output.Push(new AudioFrame(trimmed, outSampleRate, outChannels, ptsSeconds));
+                                }
                             }
 
                             ffmpeg.av_frame_unref(frame);
@@ -690,6 +779,16 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         }
 
         // ========== helpers ==========
+
+        // FFmpeg pts(time_base 단위) → 초 단위 double 로 환산. NOPTS 면 NaN.
+        private static double PtsToSeconds(long pts, AVRational timeBase)
+        {
+            if (pts == ffmpeg.AV_NOPTS_VALUE)
+            {
+                return double.NaN;
+            }
+            return pts * timeBase.num / (double)timeBase.den;
+        }
 
         private static void DrainAndFreePackets(BlockingCollection<IntPtr>? queue)
         {

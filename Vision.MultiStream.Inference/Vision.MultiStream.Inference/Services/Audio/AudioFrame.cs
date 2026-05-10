@@ -10,15 +10,19 @@ namespace Vision.MultiStream.Inference.Services.Audio
     /// </summary>
     public sealed class AudioFrame
     {
-        public AudioFrame(byte[] pcm, int sampleRate, int channels)
+        public AudioFrame(byte[] pcm, int sampleRate, int channels, double ptsSeconds)
         {
             Pcm = pcm;
             SampleRate = sampleRate;
             Channels = channels;
+            PtsSeconds = ptsSeconds;
         }
 
         public byte[] Pcm { get; }
         public int SampleRate { get; }
         public int Channels { get; }
+
+        // PTS 가 NOPTS 또는 미지원이면 double.NaN.
+        public double PtsSeconds { get; }
     }
 }
