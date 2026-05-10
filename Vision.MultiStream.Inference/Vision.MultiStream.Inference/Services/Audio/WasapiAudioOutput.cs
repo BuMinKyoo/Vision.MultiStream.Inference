@@ -11,6 +11,10 @@ namespace Vision.MultiStream.Inference.Services.Audio
     ///     멀티스트림 환경에서는 WaveOutEvent 가 더 안전 (윈도우 기본 믹서 경로).
     ///   - BufferedWaveProvider 가 푸시-기반이라 디코더 스레드에서 그냥 AddSamples 호출 가능.
     ///   - 처음 Push 가 들어올 때 WaveFormat 확정 → 이후 포맷 바뀌면 재생성.
+    ///
+    /// 진단:
+    ///   - Push 직전에 BufferedBytes 와 BufferLength 를 비교해 들어가지 못할 양(willDrop) 을 누적.
+    ///   - WASAPI 가 그 짧은 시간 동안 일부 빼갈 수 있어 실제 drop 의 상한(overestimate) 임.
     /// </summary>
     public sealed class WasapiAudioOutput : IAudioOutput
     {
@@ -21,6 +25,10 @@ namespace Vision.MultiStream.Inference.Services.Audio
         private int _sampleRate;
         private int _channels;
         private bool _disposed;
+
+        // 진단용 누적 카운터.
+        private long _totalRequestedBytes;
+        private long _totalDroppedBytes;
 
         public void Push(AudioFrame frame)
         {
@@ -47,7 +55,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
                     _buffer = new BufferedWaveProvider(format)
                     {
                         // 1초치 버퍼면 충분. 더 크면 lag, 더 작으면 jitter 시 끊김.
-                        BufferDuration = TimeSpan.FromSeconds(1),
+                        BufferDuration = TimeSpan.FromMilliseconds(100),
                         DiscardOnBufferOverflow = true
                     };
                     _waveOut = new WaveOutEvent
@@ -60,7 +68,95 @@ namespace Vision.MultiStream.Inference.Services.Audio
                     _waveOut.Play();
                 }
 
-                _buffer!.AddSamples(frame.Pcm, 0, frame.Pcm.Length);
+                int available = _buffer!.BufferLength - _buffer.BufferedBytes;
+                int willDrop = Math.Max(0, frame.Pcm.Length - available);
+                _totalRequestedBytes += frame.Pcm.Length;
+                _totalDroppedBytes += willDrop;
+
+                _buffer.AddSamples(frame.Pcm, 0, frame.Pcm.Length);
+            }
+        }
+
+        public int BufferedMs
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_buffer == null)
+                    {
+                        return 0;
+                    }
+                    return (int)_buffer.BufferedDuration.TotalMilliseconds;
+                }
+            }
+        }
+
+        public int BufferLengthMs
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_buffer == null)
+                    {
+                        return 0;
+                    }
+                    return (int)_buffer.BufferDuration.TotalMilliseconds;
+                }
+            }
+        }
+
+        public double FillRatio
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_buffer == null || _buffer.BufferLength == 0)
+                    {
+                        return 0;
+                    }
+                    return (double)_buffer.BufferedBytes / _buffer.BufferLength;
+                }
+            }
+        }
+
+        public long TotalRequestedBytes => System.Threading.Interlocked.Read(ref _totalRequestedBytes);
+
+        public long TotalDroppedBytes => System.Threading.Interlocked.Read(ref _totalDroppedBytes);
+
+        public double DropRatio
+        {
+            get
+            {
+                long req = TotalRequestedBytes;
+                if (req == 0)
+                {
+                    return 0;
+                }
+                return (double)TotalDroppedBytes / req;
+            }
+        }
+
+        // bytes → ms 환산. WaveFormat 이 결정되기 전엔 0.
+        public int TotalDroppedMs
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_buffer == null || _sampleRate == 0 || _channels == 0)
+                    {
+                        return 0;
+                    }
+                    int bytesPerSec = _sampleRate * _channels * 2; // S16 = 2 bytes/sample
+                    if (bytesPerSec == 0)
+                    {
+                        return 0;
+                    }
+                    return (int)(_totalDroppedBytes * 1000 / bytesPerSec);
+                }
             }
         }
 

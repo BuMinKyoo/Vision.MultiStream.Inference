@@ -12,5 +12,12 @@ namespace Vision.MultiStream.Inference.Services.Audio
     public interface IAudioOutput : IDisposable
     {
         void Push(AudioFrame frame);
+
+        // 진단 — UI/로그 폴링용. 구현이 아직 초기화 전이면 0/0 리턴.
+        int BufferedMs { get; }
+        int BufferLengthMs { get; }
+        double FillRatio { get; }
+        double DropRatio { get; }
+        int TotalDroppedMs { get; }
     }
 }

@@ -288,6 +288,18 @@
                                                     <Run Text="  후처리"/>
                                                     <Run Text="{Binding PostprocessMs, StringFormat={}{0:F1}ms, Mode=OneWay}"/>
                                                 </TextBlock>
+                                                <TextBlock Foreground="#88CCFF" FontSize="10" Margin="0,2,0,0">
+                                                    <Run Text="오디오 fill"/>
+                                                    <Run Text="{Binding AudioBufferedMs, Mode=OneWay}"/>
+                                                    <Run Text="/"/>
+                                                    <Run Text="{Binding AudioBufferLengthMs, Mode=OneWay}"/>
+                                                    <Run Text="ms"/>
+                                                    <Run Text="  drop"/>
+                                                    <Run Text="{Binding AudioDropPercent, StringFormat={}{0:F2}%, Mode=OneWay}"/>
+                                                    <Run Text="  drop누적"/>
+                                                    <Run Text="{Binding AudioTotalDroppedMs, Mode=OneWay}"/>
+                                                    <Run Text="ms"/>
+                                                </TextBlock>
                                             </StackPanel>
                                         </Border>
 

@@ -48,10 +48,17 @@ namespace Vision.MultiStream.Inference.ViewModels
         private double _preprocessMs;
         private double _inferenceMs;
         private double _postprocessMs;
+        private int _audioBufferedMs;
+        private int _audioBufferLengthMs;
+        private double _audioFillRatio;
+        private double _audioDropPercent;
+        private int _audioTotalDroppedMs;
 
         private RtspFrameSource? _source;
+        private IAudioOutput? _audioOutput;
         private CancellationTokenSource? _inferenceCts;
         private Task? _inferenceTask;
+        private DispatcherTimer? _audioDiagTimer;
 
         private readonly FpsCounter _displayFpsCounter = new();
         private readonly FpsCounter _inferenceFpsCounter = new();
@@ -348,6 +355,71 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        public int AudioBufferedMs
+        {
+            get => _audioBufferedMs;
+            private set
+            {
+                if (_audioBufferedMs != value)
+                {
+                    _audioBufferedMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public int AudioBufferLengthMs
+        {
+            get => _audioBufferLengthMs;
+            private set
+            {
+                if (_audioBufferLengthMs != value)
+                {
+                    _audioBufferLengthMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double AudioFillRatio
+        {
+            get => _audioFillRatio;
+            private set
+            {
+                if (Math.Abs(_audioFillRatio - value) > 0.005)
+                {
+                    _audioFillRatio = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double AudioDropPercent
+        {
+            get => _audioDropPercent;
+            private set
+            {
+                if (Math.Abs(_audioDropPercent - value) > 0.01)
+                {
+                    _audioDropPercent = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public int AudioTotalDroppedMs
+        {
+            get => _audioTotalDroppedMs;
+            private set
+            {
+                if (_audioTotalDroppedMs != value)
+                {
+                    _audioTotalDroppedMs = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
         // 외부(MultiStreamViewModel 의 전체 ON/OFF) 에서 사용할 수 있는 직접 setter
         public void SetVideo(bool enabled)
         {
@@ -501,11 +573,17 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
 
                 IAudioOutput? audioOutput = wantAudio ? new WasapiAudioOutput() : null;
+                _audioOutput = audioOutput;
                 _source.Start(wantVideo, audioOutput);
 
                 if (wantVideo && _isInferenceEnabled)
                 {
                     StartInferenceLoop();
+                }
+
+                if (audioOutput != null)
+                {
+                    StartAudioDiagTimer();
                 }
 
                 StatusMessage = "연결 중...";
@@ -549,6 +627,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             try
             {
                 StopInferenceLoop();
+                StopAudioDiagTimer();
+                _audioOutput = null; // RtspFrameSource.Stop() 이 Dispose 까지 책임짐
 
                 if (_source != null)
                 {
@@ -558,11 +638,56 @@ namespace Vision.MultiStream.Inference.ViewModels
                     _source.Dispose();
                     _source = null;
                 }
+
+                AudioBufferedMs = 0;
+                AudioBufferLengthMs = 0;
+                AudioFillRatio = 0;
+                AudioDropPercent = 0;
+                AudioTotalDroppedMs = 0;
             }
             catch
             {
                 // teardown 중 예외는 무시
             }
+        }
+
+        private void StartAudioDiagTimer()
+        {
+            if (_audioDiagTimer != null)
+            {
+                return;
+            }
+            _audioDiagTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(200)
+            };
+            _audioDiagTimer.Tick += OnAudioDiagTick;
+            _audioDiagTimer.Start();
+        }
+
+        private void StopAudioDiagTimer()
+        {
+            if (_audioDiagTimer == null)
+            {
+                return;
+            }
+            _audioDiagTimer.Stop();
+            _audioDiagTimer.Tick -= OnAudioDiagTick;
+            _audioDiagTimer = null;
+        }
+
+        private void OnAudioDiagTick(object? sender, EventArgs e)
+        {
+            IAudioOutput? output = _audioOutput;
+            if (output == null)
+            {
+                return;
+            }
+            AudioBufferedMs = output.BufferedMs;
+            AudioBufferLengthMs = output.BufferLengthMs;
+            AudioFillRatio = output.FillRatio;
+            AudioDropPercent = output.DropRatio * 100.0;
+            AudioTotalDroppedMs = output.TotalDroppedMs;
         }
 
         private void OnSourceStatusChanged(object? sender, string message)
