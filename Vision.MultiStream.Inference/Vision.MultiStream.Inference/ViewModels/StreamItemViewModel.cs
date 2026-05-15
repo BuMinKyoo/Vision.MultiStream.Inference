@@ -39,7 +39,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _rtspUrl;
         private InferenceDevice _device;
         private bool _isVideoEnabled;
-        private bool _isAudioEnabled;
+        private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
         private string _statusMessage = "대기";
         private WriteableBitmap? _imageSource;
