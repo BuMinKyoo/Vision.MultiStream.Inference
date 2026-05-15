@@ -412,5 +412,87 @@
                 </Border>
             </Grid>
         </TabItem>
+
+        <!-- ============ MP3 플레이어 탭 ============ -->
+        <TabItem Header="MP3 플레이어" DataContext="{Binding Mp3Player}">
+            <Grid Margin="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="320"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 좌: 재생 상태 영역 -->
+                <Border Grid.Row="0" Grid.Column="0" BorderBrush="#888" BorderThickness="1"
+                        Background="#222" Margin="0,0,8,0">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="🎵" FontSize="64" HorizontalAlignment="Center" Foreground="#666"/>
+                        <TextBlock Text="{Binding StatusMessage}" Foreground="#DDD" FontSize="14"
+                                   HorizontalAlignment="Center" Margin="0,12,0,0"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 우: 플레이리스트 -->
+                <DockPanel Grid.Row="0" Grid.Column="1">
+                    <TextBlock DockPanel.Dock="Top" Text="플레이리스트" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="파일 추가..." Command="{Binding AddFilesCommand}" Width="90" Height="28"/>
+                        <Button Content="선택 삭제" Command="{Binding RemoveSelectedCommand}" Width="80" Height="28" Margin="6,0,0,0"/>
+                        <Button Content="비우기" Command="{Binding ClearPlaylistCommand}" Width="70" Height="28" Margin="6,0,0,0"/>
+                    </StackPanel>
+                    <ListBox ItemsSource="{Binding Playlist}" SelectedItem="{Binding SelectedTrack}"
+                             HorizontalContentAlignment="Stretch">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="{x:Type models:Mp3Track}">
+                                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" Padding="2"/>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+
+                <!-- 하단: 트랜스포트 컨트롤 -->
+                <Border Grid.Row="1" Grid.ColumnSpan="2" Background="#EEE" Padding="10,8" Margin="0,8,0,0">
+                    <StackPanel>
+                        <!-- 진행 슬라이더 -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding PositionText}" VerticalAlignment="Center"
+                                       FontFamily="Consolas" Margin="0,0,8,0"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="{Binding DurationSeconds}"
+                                    Value="{Binding PositionSeconds}" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" Text="{Binding DurationText}" VerticalAlignment="Center"
+                                       FontFamily="Consolas" Margin="8,0,0,0"/>
+                        </Grid>
+                        <!-- 재생 버튼 + 볼륨 -->
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button Content="⏮" Command="{Binding PreviousCommand}" Width="44" Height="32" FontSize="14"/>
+                                <Button Content="▶" Command="{Binding PlayCommand}" Width="44" Height="32" FontSize="14" Margin="6,0,0,0"/>
+                                <Button Content="⏸" Command="{Binding PauseCommand}" Width="44" Height="32" FontSize="14" Margin="6,0,0,0"/>
+                                <Button Content="⏹" Command="{Binding StopCommand}" Width="44" Height="32" FontSize="14" Margin="6,0,0,0"/>
+                                <Button Content="⏭" Command="{Binding NextCommand}" Width="44" Height="32" FontSize="14" Margin="6,0,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="🔊" VerticalAlignment="Center"/>
+                                <Slider Width="100" Minimum="0" Maximum="1" Value="{Binding Volume}"
+                                        VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </TabItem>
     </TabControl>
 </Window>
