@@ -13,6 +13,12 @@ namespace Vision.MultiStream.Inference.Services.Audio
     {
         void Push(AudioFrame frame);
 
+        /// <summary>
+        /// 사운드카드 볼륨을 0/원본으로 토글. true 면 무음 출력.
+        /// PCM 은 그대로 흐르고 버퍼/PTS 도 정상 진행 → audio-master 동기화가 끊기지 않는다.
+        /// </summary>
+        bool IsMuted { get; set; }
+
         // 진단 — UI/로그 폴링용. 구현이 아직 초기화 전이면 0/0 리턴.
         int BufferedMs { get; }
         int BufferLengthMs { get; }

@@ -25,6 +25,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
         private int _sampleRate;
         private int _channels;
         private bool _disposed;
+        private bool _isMuted;
 
         // 진단용 누적 카운터.
         private long _totalRequestedBytes;
@@ -64,6 +65,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
                         NumberOfBuffers = 3
                     };
                     _waveOut.Init(_buffer);
+                    _waveOut.Volume = _isMuted ? 0f : 1f;
                     _waveOut.Play();
                 }
 
@@ -73,6 +75,32 @@ namespace Vision.MultiStream.Inference.Services.Audio
                 _totalDroppedBytes += willDrop;
 
                 _buffer.AddSamples(frame.Pcm, 0, frame.Pcm.Length);
+            }
+        }
+
+        public bool IsMuted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _isMuted;
+                }
+            }
+            set
+            {
+                lock (_gate)
+                {
+                    if (_isMuted == value)
+                    {
+                        return;
+                    }
+                    _isMuted = value;
+                    if (_waveOut != null)
+                    {
+                        _waveOut.Volume = value ? 0f : 1f;
+                    }
+                }
             }
         }
 

@@ -17,10 +17,14 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
     ///   Thread 2 (Video Decoder)   : 비디오 큐 → H.264 디코딩 → sws_scale → BGR → RtspFrame.
     ///   Thread 3 (Audio Decoder)   : 오디오 큐 → AAC/G.711 디코딩 → swr_resample → PCM s16 → IAudioOutput.
     ///
-    /// 오디오 출력 정책 (1번 정책 — "끈 스트림은 비용 0"):
+    /// 오디오 출력 정책:
+    ///   - 비디오는 항상 활성. 오디오는 비디오에 종속 (audio-only 모드 없음).
     ///   - Start(audioOutput=null) 면 오디오 디코더/오디오 큐 자체를 만들지 않음 → 디먹서가 오디오 패킷 즉시 drop.
-    ///   - Start(audioOutput!=null) 면 오디오 스레드 가동.
-    ///   - 오디오 토글은 ViewModel 측에서 Stop/Start 로 처리 (구현 단순화).
+    ///   - Start(audioOutput!=null) 면 오디오 스레드 가동 + MediaClock 을 audio-master 모드로 전환.
+    ///
+    /// A/V 동기화:
+    ///   - 오디오 활성: audio-master. 오디오는 게이팅 없이 흘려보내고, 비디오가 실제 오디오 재생 위치에 맞춰 출력.
+    ///   - 오디오 비활성: wall-clock. 비디오 첫 프레임 PTS 를 anchor.
     ///
     /// Channel 의 FullMode=DropOldest 로 추론용 큐는 항상 latest-only.
     /// </summary>
@@ -37,8 +41,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         // 오디오 출력 — 외부에서 주입. null 이면 오디오 비활성.
         private IAudioOutput? _audioOutput;
-        // 비디오 디코딩/표시 ON/OFF. false 면 데먹서가 비디오 패킷을 drop → 디코더 스레드 자체를 안 띄움.
-        private bool _videoEnabled;
 
         // 디먹서가 디코더에게 packet pointer 를 넘기는 큐. 클론한 AVPacket* 를 IntPtr 로 들고 다님.
         private BlockingCollection<IntPtr>? _videoPacketQueue;
@@ -48,7 +50,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private const int VideoQueueCapacity = 4;
         private const int AudioQueueCapacity = 32;
 
-        // A/V 동기화 마스터 클럭 — 비디오 첫 프레임에서 anchor.
+        // A/V 동기화 마스터 클럭. 오디오 활성 시 audio-master, 그 외 wall-clock.
         private readonly MediaClock _clock = new();
 
         public RtspFrameSource(string rtspUrl)
@@ -68,36 +70,25 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         public event EventHandler<RtspFrame>? FrameCaptured;
 
         /// <summary>
-        /// videoEnabled = true 면 비디오 디코딩 + FrameCaptured/Reader 출력.
-        /// audioOutput 가 null 이 아니면 오디오 디코딩 + 출력 활성화.
-        /// 둘 다 꺼져 있으면 시작하지 않는다.
+        /// 비디오 디코딩 + FrameCaptured/Reader 출력은 항상 활성화된다.
+        /// audioOutput 가 null 이 아니면 오디오 디코딩 + 출력도 활성화 (오디오는 비디오에 종속).
         /// </summary>
-        public void Start(bool videoEnabled, IAudioOutput? audioOutput)
+        public void Start(IAudioOutput? audioOutput)
         {
             if (_isRunning)
             {
                 return;
             }
-            if (!videoEnabled && audioOutput == null)
-            {
-                return; // 둘 다 OFF 면 RTSP 자체를 안 연다
-            }
 
             FFmpegLibraryLoader.EnsureRegistered();
 
-            _videoEnabled = videoEnabled;
             _audioOutput = audioOutput;
             _clock.Reset(); // 새 세션 시작이므로 클럭 초기화
             _cts = new CancellationTokenSource();
 
-            if (_videoEnabled)
-            {
-                _videoPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), VideoQueueCapacity);
-            }
-            if (_audioOutput != null)
-            {
-                _audioPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), AudioQueueCapacity);
-            }
+            _videoPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), VideoQueueCapacity);
+
+            _audioPacketQueue = new BlockingCollection<IntPtr>(new ConcurrentQueue<IntPtr>(), AudioQueueCapacity);
 
             _demuxThread = new Thread(() => DemuxLoop(_cts.Token))
             {
@@ -209,7 +200,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                     }
                 }
 
-                bool videoActive = _videoEnabled && videoStreamIndex >= 0 && _videoPacketQueue != null;
+                bool videoActive = videoStreamIndex >= 0 && _videoPacketQueue != null;
 
                 if (videoActive)
                 {
@@ -218,7 +209,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                     AVCodec* vCodec = ffmpeg.avcodec_find_decoder(vStream->codecpar->codec_id);
                     if (vCodec == null)
                     {
-                        // 비디오 디코더 못 찾아도 오디오만으로 진행 가능
+                        // 비디오 디코더 못 찾으면 오디오도 비활성화됨
                         videoActive = false;
                     }
                     else
@@ -235,7 +226,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 }
 
                 // ---- Audio codec open (오디오 활성 + 스트림 존재 시) ----
-                bool audioActive = _audioOutput != null && audioStreamIndex >= 0 && _audioPacketQueue != null;
+                // 오디오는 비디오에 종속 — 비디오가 활성이 아니면 오디오도 열지 않는다.
+                bool audioActive = videoActive && _audioOutput != null && audioStreamIndex >= 0 && _audioPacketQueue != null;
                 if (audioActive)
                 {
                     AVStream* aStream = fmtCtx->streams[audioStreamIndex];
@@ -289,8 +281,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 {
                     AVCodecContext* audioCodecCtxLocal = audioCodecCtx;
                     AVRational aTimeBase = fmtCtx->streams[audioStreamIndex]->time_base;
-                    bool videoIsActiveCapture = videoActive; // 영상 디코더가 떠 있는지 → 오디오 측 anchor 분기 결정
-                    _audioThread = new Thread(() => AudioDecodeLoop(audioCodecCtxLocal, aTimeBase, videoIsActiveCapture, ct))
+                    // 오디오 활성 → audio-master 모드로 전환. 비디오는 이 클럭을 따라간다.
+                    _clock.UseAudioMaster(_audioOutput!);
+                    _audioThread = new Thread(() => AudioDecodeLoop(audioCodecCtxLocal, aTimeBase, ct))
                     {
                         IsBackground = true,
                         Name = $"RtspAudio[{_url}]"
@@ -460,12 +453,14 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 break;
                             }
 
-                            // ===== PTS 게이트 (Phase 2) =====
-                            // 첫 프레임에서 anchor. 이후 너무 늦으면 drop, 너무 이르면 sleep.
+                            // ===== PTS 게이트 =====
+                            // 마스터 클럭에 맞춰 너무 늦으면 drop, 너무 이르면 sleep.
+                            // wall-clock 모드(영상만)면 첫 프레임에서 anchor;
+                            // audio-master 모드면 Anchor 는 무시되고 오디오 재생 위치를 따라간다.
                             double ptsSeconds = PtsToSeconds(frame->pts, timeBase);
                             if (!double.IsNaN(ptsSeconds))
                             {
-                                if (!_clock.IsAnchored)
+                                if (!_clock.IsReady)
                                 {
                                     _clock.Anchor(ptsSeconds);
                                 }
@@ -479,7 +474,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 }
                                 if (delay > TimeSpan.FromMilliseconds(5))
                                 {
-                                    // 너무 이름 → 출력 시점까지 대기 (cancel 시 즉시 빠져나감)
+                                    // 너무 이른 → 출력 시점까지 대기 (cancel 시 즉시 빠져나감)
                                     if (ct.WaitHandle.WaitOne(delay))
                                     {
                                         ffmpeg.av_frame_unref(frame);
@@ -574,7 +569,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         // ========== Thread 3 : Audio Decoder ==========
 
-        private void AudioDecodeLoop(AVCodecContext* codecCtx, AVRational timeBase, bool videoActive, CancellationToken ct)
+        private void AudioDecodeLoop(AVCodecContext* codecCtx, AVRational timeBase, CancellationToken ct)
         {
             /*
              
@@ -696,57 +691,12 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                                 double ptsSeconds = PtsToSeconds(frame->pts, timeBase);
 
-                                // ===== Phase 3: A/V 동기화 (오디오 측) =====
-                                // 영상이 켜져있으면 영상 첫 프레임이 anchor 할 때까지 오디오는 drop.
-                                // 영상이 꺼져있으면 오디오가 직접 anchor (audio-only 모드).
-                                bool shouldPush = true;
-                                if (!_clock.IsAnchored)
+                                // Audio-master: 게이팅 없이 바로 push. 사운드카드가 페이싱하고,
+                                // 비디오는 이 push PTS 와 출력 버퍼 깊이를 보고 자기를 맞춘다.
+                                output.Push(new AudioFrame(trimmed, outSampleRate, outChannels, ptsSeconds));
+                                if (!double.IsNaN(ptsSeconds))
                                 {
-                                    // videoActive이 안됬다는 것은 IsAnchored가 만들어 지지 않았다는 것
-                                    if (!videoActive && !double.IsNaN(ptsSeconds))
-                                    {
-                                        // 오디오 anchor: 영상이 없으므로 오디오 첫 프레임으로 anchor. PTS 없는 프레임은 drop (동기화 불가)
-                                        _clock.Anchor(ptsSeconds);
-                                    }
-                                    else
-                                    {
-                                        shouldPush = false; // 비디오 anchor 대기 또는 PTS 미지원 → drop
-                                    }
-                                }
-                                else if (!double.IsNaN(ptsSeconds) && ptsSeconds < _clock.FirstPtsSeconds)
-                                {
-                                    shouldPush = false; // 영상 시작점보다 앞선 오디오 → drop
-                                }
-
-                                // ===== Phase 4: PTS 기반 매-push 게이팅 =====
-                                // 매 푸시가 "PTS 시점 - 50ms" 에 일어나도록 sleep.
-                                // → BufferedWaveProvider 깊이가 ~50ms 헤드룸으로 유지되어
-                                //    영상과 오디오가 wall clock 기준 같은 PTS 시점에 출력됨.
-                                if (shouldPush && _clock.IsAnchored && !double.IsNaN(ptsSeconds))
-                                {
-                                    TimeSpan ptsDelay = _clock.GetDelay(ptsSeconds);
-                                    if (ptsDelay < TimeSpan.FromMilliseconds(-100))
-                                    {
-                                        shouldPush = false; // 너무 늦음 → drop
-                                    }
-                                    else
-                                    {
-                                        // 50ms 헤드룸: PTS 시점보다 50ms 일찍 push (underrun 방지)
-                                        TimeSpan adjusted = ptsDelay - TimeSpan.FromMilliseconds(50);
-                                        if (adjusted > TimeSpan.FromMilliseconds(5))
-                                        {
-                                            if (ct.WaitHandle.WaitOne(adjusted))
-                                            {
-                                                ffmpeg.av_frame_unref(frame);
-                                                return; // cancel 시 즉시 정리
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (shouldPush)
-                                {
-                                    output.Push(new AudioFrame(trimmed, outSampleRate, outChannels, ptsSeconds));
+                                    _clock.OnAudioPushed(ptsSeconds);
                                 }
                             }
 

@@ -20,11 +20,13 @@ namespace Vision.MultiStream.Inference.ViewModels
     /// 멀티스트림에서 1개 RTSP 스트림을 표현하는 ViewModel.
     /// 책임: 자기 자신의 RtspFrameSource + 추론 루프 + 오디오 출력 수명 관리.
     ///
-    /// 세 개의 독립 토글:
-    ///   - IsVideoEnabled     : 비디오 디코딩 + 표시
-    ///   - IsAudioEnabled     : 오디오 디코딩 + 스피커 출력
-    ///   - IsInferenceEnabled : YOLO 추론 루프 ON/OFF (비디오가 켜져 있을 때만 의미 있음)
-    /// 비디오/소리 토글은 RTSP 재구성을 일으킨다 (디코더 구성 변경).
+    /// 세 개의 토글:
+    ///   - IsVideoEnabled     : 비디오 디코딩 + 표시. 토글 시 RTSP 재구성.
+    ///   - IsAudioEnabled     : 사운드카드 mute/unmute (비디오가 켜져 있을 때만 켤 수 있음 — 비디오에 종속, audio-only 모드 없음).
+    ///                          오디오 디코더는 비디오 가동 중에는 항상 돌아가고 PTS 도 계속 push 됨 (audio-master 동기화 유지).
+    ///                          토글은 사운드카드 볼륨만 0/1 로 바꿔 RTSP 재구성을 일으키지 않는다.
+    ///   - IsInferenceEnabled : YOLO 추론 루프 ON/OFF (비디오가 켜져 있을 때만 의미 있음).
+    /// 비디오를 끄면 오디오도 함께 꺼진다.
     /// 추론 토글은 RTSP 를 건드리지 않고 추론 루프만 start/stop 한다.
     /// </summary>
     public sealed class StreamItemViewModel : BaseViewModel, IDisposable
@@ -80,7 +82,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             _dispatcher = Application.Current.Dispatcher;
 
             ToggleVideoCommand = new RelayCommand(ToggleVideo, () => !string.IsNullOrWhiteSpace(RtspUrl));
-            ToggleAudioCommand = new RelayCommand(ToggleAudio, () => !string.IsNullOrWhiteSpace(RtspUrl));
+            ToggleAudioCommand = new RelayCommand(ToggleAudio, () => _isVideoEnabled);
             ToggleInferenceCommand = new RelayCommand(ToggleInference);
             StartCommand = new RelayCommand(StartAll, () => !string.IsNullOrWhiteSpace(RtspUrl));
             StopCommand = new RelayCommand(StopAll, () => IsActive);
@@ -125,7 +127,6 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _rtspUrl = value;
                 OnPropertyChanged();
                 ToggleVideoCommand.RaiseCanExecuteChanged();
-                ToggleAudioCommand.RaiseCanExecuteChanged();
             }
         }
 
@@ -428,14 +429,26 @@ namespace Vision.MultiStream.Inference.ViewModels
                 return;
             }
             _isVideoEnabled = enabled;
+            // 오디오는 비디오에 종속 — 비디오를 끄면 오디오도 함께 꺼진다.
+            if (!enabled)
+            {
+                _isAudioEnabled = false;
+            }
             OnPropertyChanged(nameof(IsVideoEnabled));
+            OnPropertyChanged(nameof(IsAudioEnabled));
             OnPropertyChanged(nameof(IsActive));
             StopCommand.RaiseCanExecuteChanged();
+            ToggleAudioCommand.RaiseCanExecuteChanged();
             ApplyState();
         }
 
         public void SetAudio(bool enabled)
         {
+            // 오디오는 비디오에 종속 — 비디오가 꺼져 있으면 오디오만 켤 수 없다.
+            if (enabled && !_isVideoEnabled)
+            {
+                return;
+            }
             if (_isAudioEnabled == enabled)
             {
                 return;
@@ -444,7 +457,12 @@ namespace Vision.MultiStream.Inference.ViewModels
             OnPropertyChanged(nameof(IsAudioEnabled));
             OnPropertyChanged(nameof(IsActive));
             StopCommand.RaiseCanExecuteChanged();
-            ApplyState();
+
+            // 사운드카드 볼륨만 토글. RTSP/디코더는 그대로 → 영상 끊김 없음, audio-master 동기화 유지.
+            if (_audioOutput != null)
+            {
+                _audioOutput.IsMuted = !enabled;
+            }
         }
 
         // 추론 토글은 RTSP 재구성 없이 추론 루프만 start/stop 한다.
@@ -506,6 +524,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(IsAudioEnabled));
                 OnPropertyChanged(nameof(IsActive));
                 StopCommand.RaiseCanExecuteChanged();
+                ToggleAudioCommand.RaiseCanExecuteChanged();
                 ApplyState();
             }
         }
@@ -521,23 +540,21 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(IsAudioEnabled));
                 OnPropertyChanged(nameof(IsActive));
                 StopCommand.RaiseCanExecuteChanged();
+                ToggleAudioCommand.RaiseCanExecuteChanged();
                 ApplyState();
             }
         }
 
         /// <summary>
-        /// 두 토글의 현재 상태에 맞춰 source 를 재구성한다.
-        /// 어느 한쪽이라도 토글되면 항상 Stop → Start 로 단순화 (의도적인 짧은 reconnect).
+        /// IsVideoEnabled 상태에 맞춰 source 를 재구성한다.
+        /// IsVideoEnabled 토글 시 Stop → Start 로 RTSP 재구성. IsAudioEnabled 토글은 이 메서드를 거치지 않고 볼륨만 변경한다.
         /// </summary>
         private void ApplyState()
         {
             // 항상 기존 source 닫고 새로 구성
             TearDownSource();
 
-            bool wantVideo = _isVideoEnabled;
-            bool wantAudio = _isAudioEnabled;
-
-            if (!wantVideo && !wantAudio)
+            if (!_isVideoEnabled)
             {
                 Detections.Clear();
                 ImageSource = null;
@@ -560,6 +577,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(IsVideoEnabled));
                 OnPropertyChanged(nameof(IsAudioEnabled));
                 OnPropertyChanged(nameof(IsActive));
+                ToggleAudioCommand.RaiseCanExecuteChanged();
                 return;
             }
 
@@ -572,19 +590,22 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
 
-                IAudioOutput? audioOutput = wantAudio ? new WasapiAudioOutput() : null;
+                // 오디오 출력은 항상 생성. 토글 OFF 상태면 muted 로 시작.
+                // 디코더는 스트림에 오디오 트랙이 있으면 가동, 없으면 자동으로 안 띄움.
+                IAudioOutput audioOutput = new WasapiAudioOutput
+                {
+                    IsMuted = !_isAudioEnabled
+                };
                 _audioOutput = audioOutput;
-                _source.Start(wantVideo, audioOutput);
+                _source.Start(audioOutput);
 
-                if (wantVideo && _isInferenceEnabled)
+                if (_isInferenceEnabled)
                 {
                     StartInferenceLoop();
                 }
 
-                if (audioOutput != null)
-                {
-                    StartAudioDiagTimer();
-                }
+                // 오디오 진단 정보를 UI에 주기적으로 갱신하는 타이머
+                StartAudioDiagTimer();
 
                 StatusMessage = "연결 중...";
             }

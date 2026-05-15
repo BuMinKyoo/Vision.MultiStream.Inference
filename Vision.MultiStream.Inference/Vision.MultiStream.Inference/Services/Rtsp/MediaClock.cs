@@ -1,60 +1,115 @@
 using System;
 using System.Diagnostics;
+using Vision.MultiStream.Inference.Services.Audio;
 
 namespace Vision.MultiStream.Inference.Services.Rtsp
 {
     /// <summary>
-    /// A/V 동기화용 마스터 클럭.
+    /// A/V 동기화용 마스터 클럭. 두 가지 모드를 지원한다.
     ///
-    /// 첫 프레임 도착 시점을 wall clock 에 anchor 한 뒤,
-    /// 이후 모든 프레임은 (pts - firstPts) 가 (now - startTime) 과 같아질 때 출력되도록 게이트.
+    /// 1) Audio-master 모드 (영상+오디오):
+    ///    사운드카드가 페이싱하는 실제 오디오 재생 위치를 마스터로 삼는다.
+    ///    마스터 PTS = (마지막 push 된 오디오 PTS) − (출력 버퍼에 쌓인 시간).
+    ///    오디오는 게이팅 없이 흘려보내고, 비디오가 그 시각에 맞춰 표시된다.
     ///
-    /// 사용 패턴:
-    ///   if (!clock.IsAnchored) { clock.Anchor(pts); }
+    /// 2) Wall-clock 모드 (영상만):
+    ///    비디오 첫 프레임 PTS 를 wall clock 에 anchor 한다.
+    ///    마스터 PTS = firstPts + wallElapsed.
+    ///
+    /// 비디오 디코더 사용 패턴 (양 모드 공통):
+    ///   if (!clock.IsReady) { clock.Anchor(pts); } // audio 모드면 내부적으로 무시됨
     ///   TimeSpan delay = clock.GetDelay(pts);
-    ///     delay > 0  → 미래(아직 일찍 옴, sleep 필요)
-    ///     delay < 0  → 과거(이미 늦음, drop 후보)
+    ///     delay > 0 → 미래(일찍 옴, sleep)
+    ///     delay < 0 → 과거(늦음, drop 후보)
     /// </summary>
     public sealed class MediaClock
     {
         private readonly object _gate = new();
-        private bool _anchored;
-        private double _firstPtsSeconds;
-        private long _startTicks;
 
-        public bool IsAnchored
+        // 모드 결정
+        private bool _audioMaster = false;
+        private IAudioOutput? _audioOutput;
+        private double _lastAudioPushedPts = double.NaN;
+
+        // Wall-clock 모드 상태
+        private bool _wallAnchored;
+        private double _wallFirstPts;
+        private long _wallStartTicks;
+
+        public bool IsAudioMaster
         {
             get
             {
                 lock (_gate)
                 {
-                    return _anchored;
+                    return _audioMaster;
                 }
             }
         }
 
-        public double FirstPtsSeconds
+        /// <summary>
+        /// 마스터가 시각을 답할 준비가 됐는지.
+        /// Audio 모드: 오디오가 한 번이라도 push 됐는지.
+        /// Wall-clock 모드: anchor 됐는지.
+        /// </summary>
+        public bool IsReady
         {
             get
             {
                 lock (_gate)
                 {
-                    return _firstPtsSeconds;
+                    if (_audioMaster)
+                    {
+                        return !double.IsNaN(_lastAudioPushedPts);
+                    }
+                    return _wallAnchored;
                 }
             }
         }
 
+        /// <summary>
+        /// 오디오 마스터 모드로 전환. Start 시점에 오디오가 활성이면 호출한다.
+        /// </summary>
+        public void UseAudioMaster(IAudioOutput audioOutput)
+        {
+            lock (_gate)
+            {
+                _audioMaster = true;
+                _audioOutput = audioOutput;
+            }
+        }
+
+        /// <summary>
+        /// 비디오 첫 프레임에서 호출. Audio-master 모드면 무시된다.
+        /// </summary>
         public void Anchor(double firstPtsSeconds)
         {
             lock (_gate)
             {
-                if (_anchored)
+                if (_audioMaster)
                 {
                     return;
                 }
-                _firstPtsSeconds = firstPtsSeconds;
-                _startTicks = Stopwatch.GetTimestamp();
-                _anchored = true;
+                if (_wallAnchored)
+                {
+                    return;
+                }
+
+                // 비디오의 첫 pts 기준으로 세팅
+                _wallFirstPts = firstPtsSeconds;
+                _wallStartTicks = Stopwatch.GetTimestamp();
+                _wallAnchored = true;
+            }
+        }
+
+        /// <summary>
+        /// 오디오 디코더가 output.Push 직후 호출. 마지막 push 된 PTS 를 갱신한다.
+        /// </summary>
+        public void OnAudioPushed(double ptsSeconds)
+        {
+            lock (_gate)
+            {
+                _lastAudioPushedPts = ptsSeconds;
             }
         }
 
@@ -62,36 +117,58 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         {
             lock (_gate)
             {
-                _anchored = false;
-                _firstPtsSeconds = 0;
-                _startTicks = 0;
+                _audioMaster = false;
+                _audioOutput = null;
+                _lastAudioPushedPts = double.NaN;
+                _wallAnchored = false;
+                _wallFirstPts = 0;
+                _wallStartTicks = 0;
             }
         }
 
-        public TimeSpan GetDelay(double ptsSeconds)
+        /// <summary>
+        /// 현재 마스터 PTS(초). 준비 안됐으면 NaN.
+        /// </summary>
+        public double GetMasterPtsSeconds()
         {
             lock (_gate)
             {
-                if (!_anchored)
+                if (_audioMaster)
                 {
-                    return TimeSpan.Zero;
+                    if (double.IsNaN(_lastAudioPushedPts))
+                    {
+                        return double.NaN;
+                    }
+                    int bufferedMs = _audioOutput?.BufferedMs ?? 0;
+                    // 마지막 push PTS 에서 아직 스피커로 못 나간 양만큼 빼면 "지금 들리는 PTS".
+                    return _lastAudioPushedPts - bufferedMs / 1000.0;
                 }
 
-                // anchor PTS = 1.0, 들어온 프레임 PTS = 1.5 / targetSec = 0.5초 (앵커 0.5초 후가 이 프레임 시점)
-                double targetSec = ptsSeconds - _firstPtsSeconds;
-
-                // 월 클럭 타임라인에서 "지금 실제로 얼마나 흘렀는지"
-                double actualSec = (Stopwatch.GetTimestamp() - _startTicks) / (double)Stopwatch.Frequency;
-                return TimeSpan.FromSeconds(targetSec - actualSec);
-
-                /*
-                 
-                양수 (X > Y) │ 프레임이 일찍 도착함. 아직 출력 시점 아님 │ sleep(차이)로 대기
-                0 근처       │ 거의 정확한 시점                          │ 즉시 출력            
-                음수 (X < Y) │ 출력 시점 이미 지나감. 늦었음             │ 너무 많이 늦으면 drop
-
-                 */
+                if (_wallAnchored)
+                {
+                    double wallElapsed = (Stopwatch.GetTimestamp() - _wallStartTicks) / (double)Stopwatch.Frequency;
+                    return _wallFirstPts + wallElapsed;
+                }
+                else
+                {
+                    return double.NaN;
+                }
+                
             }
+        }
+
+        /// <summary>
+        /// 비디오 PTS 기준 출력 시점까지 남은 시간.
+        /// 마스터 준비 안됐으면 Zero (즉시 출력).
+        /// </summary>
+        public TimeSpan GetDelay(double ptsSeconds)
+        {
+            double master = GetMasterPtsSeconds();
+            if (double.IsNaN(master))
+            {
+                return TimeSpan.Zero;
+            }
+            return TimeSpan.FromSeconds(ptsSeconds - master);
         }
     }
 }
