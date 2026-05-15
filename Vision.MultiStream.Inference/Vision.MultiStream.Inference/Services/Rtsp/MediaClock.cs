@@ -146,6 +146,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                 if (_wallAnchored)
                 {
+                    // 예를 들어 첫 비디오 프레임 PTS가 100.0초(스트림 시작부터 100초 지점)이고, 재생 시작 후 실제로 2.5초가 흘렀다면: masterPts = 100.0 + 2.5 = 102.5초, "지금 이 순간 재생되어야 할 스트림 위치"
                     double wallElapsed = (Stopwatch.GetTimestamp() - _wallStartTicks) / (double)Stopwatch.Frequency;
                     return _wallFirstPts + wallElapsed;
                 }
