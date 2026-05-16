@@ -1,5 +1,6 @@
 using System;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace Vision.MultiStream.Inference.Services.Audio
 {
@@ -22,6 +23,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
 
         private WaveOutEvent? _waveOut;
         private BufferedWaveProvider? _buffer;
+        private VolumeWaveProvider16? _volumeProvider;
         private int _sampleRate;
         private int _channels;
         private bool _disposed;
@@ -58,14 +60,19 @@ namespace Vision.MultiStream.Inference.Services.Audio
                         BufferDuration = TimeSpan.FromMilliseconds(2000),
                         DiscardOnBufferOverflow = true
                     };
+                    // waveOutSetVolume은 디바이스 전체에 적용되어 다른 스트림까지 영향 →
+                    // 스트림별 독립 볼륨을 위해 소프트웨어 볼륨 체인 사용
+                    _volumeProvider = new VolumeWaveProvider16(_buffer)
+                    {
+                        Volume = _isMuted ? 0f : 1f
+                    };
                     _waveOut = new WaveOutEvent
                     {
                         // 50ms 정도면 체감 지연 ~80ms 수준
                         DesiredLatency = 80,
                         NumberOfBuffers = 3
                     };
-                    _waveOut.Init(_buffer);
-                    _waveOut.Volume = _isMuted ? 0f : 1f;
+                    _waveOut.Init(_volumeProvider);
                     _waveOut.Play();
                 }
 
@@ -96,9 +103,9 @@ namespace Vision.MultiStream.Inference.Services.Audio
                         return;
                     }
                     _isMuted = value;
-                    if (_waveOut != null)
+                    if (_volumeProvider != null)
                     {
-                        _waveOut.Volume = value ? 0f : 1f;
+                        _volumeProvider.Volume = value ? 0f : 1f;
                     }
                 }
             }
@@ -208,6 +215,7 @@ namespace Vision.MultiStream.Inference.Services.Audio
             }
             _waveOut?.Dispose();
             _waveOut = null;
+            _volumeProvider = null;
             _buffer = null;
         }
     }
