@@ -5,11 +5,16 @@ namespace Vision.MultiStream.Inference.ViewModels
     /// </summary>
     public class ShellViewModel
     {
-        public ShellViewModel(SnapshotViewModel snapshot, MultiStreamViewModel multiStream, Mp3PlayerViewModel mp3Player)
+        public ShellViewModel(
+            SnapshotViewModel snapshot,
+            MultiStreamViewModel multiStream,
+            Mp3PlayerViewModel mp3Player,
+            PerformanceViewModel performance)
         {
             Snapshot = snapshot;
             MultiStream = multiStream;
             Mp3Player = mp3Player;
+            Performance = performance;
         }
 
         public SnapshotViewModel Snapshot { get; }
@@ -17,5 +22,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         public MultiStreamViewModel MultiStream { get; }
 
         public Mp3PlayerViewModel Mp3Player { get; }
+
+        public PerformanceViewModel Performance { get; }
     }
 }

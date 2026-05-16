@@ -21,7 +21,39 @@
         </ObjectDataProvider>
     </Window.Resources>
 
-    <TabControl>
+    <DockPanel>
+        <!-- 프로세스 성능 상태바 -->
+        <Border DockPanel.Dock="Top" Background="#1A1A1A" Padding="12,4"
+                DataContext="{Binding Performance}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Foreground="#88FF88" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center">
+                    <Run Text="CPU "/>
+                    <Run Text="{Binding CpuPercent, StringFormat={}{0:F1}%, Mode=OneWay}" FontWeight="Bold"/>
+                </TextBlock>
+                <TextBlock Foreground="#88CCFF" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="20,0,0,0">
+                    <Run Text="RAM "/>
+                    <Run Text="{Binding MemoryMb, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text=" MB"/>
+                </TextBlock>
+                <TextBlock Foreground="#FFAA44" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="20,0,0,0">
+                    <Run Text="GC  G0:"/>
+                    <Run Text="{Binding Gen0, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="  G1:"/>
+                    <Run Text="{Binding Gen1, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="  G2:"/>
+                    <Run Text="{Binding Gen2, Mode=OneWay}" FontWeight="Bold"/>
+                </TextBlock>
+                <TextBlock Foreground="#FF6666" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="20,0,0,0">
+                    <Run Text="Pause  last:"/>
+                    <Run Text="{Binding LastGcPauseMs, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="ms  max:"/>
+                    <Run Text="{Binding MaxGcPauseMs, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="ms"/>
+                </TextBlock>
+            </StackPanel>
+        </Border>
+
+        <TabControl>
         <!-- ============ RTSP 멀티 스트림 탭 ============ -->
         <TabItem Header="RTSP (다중 스트림)" DataContext="{Binding MultiStream}">
             <Grid Margin="8">
@@ -495,4 +527,5 @@
             </Grid>
         </TabItem>
     </TabControl>
+    </DockPanel>
 </Window>
