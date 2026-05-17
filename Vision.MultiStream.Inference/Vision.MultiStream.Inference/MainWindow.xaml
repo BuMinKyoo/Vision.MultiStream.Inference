@@ -48,6 +48,10 @@
                     <Run Text="{Binding LastGcPauseMs, Mode=OneWay}" FontWeight="Bold"/>
                     <Run Text="ms  max:"/>
                     <Run Text="{Binding MaxGcPauseMs, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="ms  count:"/>
+                    <Run Text="{Binding PauseCount, Mode=OneWay}" FontWeight="Bold"/>
+                    <Run Text="  total:"/>
+                    <Run Text="{Binding TotalPauseMs, Mode=OneWay}" FontWeight="Bold"/>
                     <Run Text="ms"/>
                 </TextBlock>
             </StackPanel>

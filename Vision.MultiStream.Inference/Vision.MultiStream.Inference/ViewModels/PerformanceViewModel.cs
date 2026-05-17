@@ -27,6 +27,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         // 센티넬 스레드가 쓰고, UI 타이머가 읽음 (표시용이라 lock 불필요)
         private long _lastGcPauseMs;
         private long _maxGcPauseMs;
+        private long _pauseCount;
+        private long _totalPauseMs;
 
         private double _cpuPercent;
         private long _memoryMb;
@@ -35,6 +37,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private int _gen2;
         private long _lastGcPauseMsDisplay;
         private long _maxGcPauseMsDisplay;
+        private long _pauseCountDisplay;
+        private long _totalPauseMsDisplay;
 
         public double CpuPercent
         {
@@ -78,6 +82,18 @@ namespace Vision.MultiStream.Inference.ViewModels
             private set { _maxGcPauseMsDisplay = value; OnPropertyChanged(); }
         }
 
+        public long PauseCount
+        {
+            get => _pauseCountDisplay;
+            private set { _pauseCountDisplay = value; OnPropertyChanged(); }
+        }
+
+        public long TotalPauseMs
+        {
+            get => _totalPauseMsDisplay;
+            private set { _totalPauseMsDisplay = value; OnPropertyChanged(); }
+        }
+
         public PerformanceViewModel()
         {
             _proc.Refresh();
@@ -113,6 +129,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (excess >= thresholdMs)
                 {
                     Interlocked.Exchange(ref _lastGcPauseMs, excess);
+                    Interlocked.Increment(ref _pauseCount);
+                    Interlocked.Add(ref _totalPauseMs, excess);
 
                     long current = Interlocked.Read(ref _maxGcPauseMs);
                     if (excess > current)
@@ -147,6 +165,8 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             LastGcPauseMs = Interlocked.Read(ref _lastGcPauseMs);
             MaxGcPauseMs = Interlocked.Read(ref _maxGcPauseMs);
+            PauseCount = Interlocked.Read(ref _pauseCount);
+            TotalPauseMs = Interlocked.Read(ref _totalPauseMs);
         }
 
         public void Dispose()
