@@ -53,6 +53,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         // A/V 동기화 마스터 클럭. 오디오 활성 시 audio-master, 그 외 wall-clock.
         private readonly MediaClock _clock = new();
 
+        private volatile bool _readerFramesEnabled;
+
         public RtspFrameSource(string rtspUrl)
         {
             _url = rtspUrl;
@@ -66,6 +68,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         public ChannelReader<RtspFrame> Reader => _channel.Reader;
         public bool IsRunning => _isRunning;
+        public bool ReaderFramesEnabled
+        {
+            get => _readerFramesEnabled;
+            set => _readerFramesEnabled = value;
+        }
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<RtspFrame>? FrameCaptured;
 
@@ -420,10 +427,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
             AVFrame* frame = ffmpeg.av_frame_alloc();
             SwsContext* swsCtx = null;
-            byte* dstBuffer = null;
             int dstBufSize = 0;
-            byte_ptrArray4 dstData = default;
-            int_array4 dstLinesize = default;
             int knownW = 0, knownH = 0;
 
             try
@@ -494,12 +498,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                     ffmpeg.sws_freeContext(swsCtx);
                                     swsCtx = null;
                                 }
-                                if (dstBuffer != null)
-                                {
-                                    ffmpeg.av_free(dstBuffer);
-                                    dstBuffer = null;
-                                }
-
                                 // SWS_BILINEAR == 2 (libswscale.h)
                                 swsCtx = ffmpeg.sws_getContext(
                                     w, h, (AVPixelFormat)frame->format,
@@ -509,12 +507,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 //  BGR24 한 프레임에 필요한 바이트 수 계산
                                 dstBufSize = ffmpeg.av_image_get_buffer_size(
                                     AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
-                                dstBuffer = (byte*)ffmpeg.av_malloc((ulong)dstBufSize);
-
-                                // dstData[0]에 dstBuffer 시작 주소를, dstLinesize[0]에 한 행의 바이트 수(=w*3)를 채워줌. single-plane(BGR24)이라 [0]만 쓰임
-                                ffmpeg.av_image_fill_arrays(
-                                    ref dstData, ref dstLinesize, dstBuffer,
-                                    AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
 
                                 knownW = w;
                                 knownH = h;
@@ -522,21 +514,53 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                             // "색공간 변환기 + 화면용 포맷 정리기"
                             // 압축 풀린 픽셀의 모양을 바꾸는 작업
+                            IntPtr displayBuffer = Marshal.AllocHGlobal(dstBufSize);
+                            byte_ptrArray4 dstData = default;
+                            int_array4 dstLinesize = default;
+                            ffmpeg.av_image_fill_arrays(
+                                ref dstData, ref dstLinesize, (byte*)displayBuffer,
+                                AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
+
                             ffmpeg.sws_scale(
                                 swsCtx,
                                 frame->data, frame->linesize,
                                 0, h,
                                 dstData, dstLinesize);
 
-                            // 네이티브 버퍼 → 관리 byte[] 로 복사 (다음 프레임이 덮어쓰기 전에)
-                            byte[] managed = new byte[dstBufSize];
-                            Marshal.Copy((IntPtr)dstBuffer, managed, 0, dstBufSize);
+                            // GC 스파이크 완화:
+                            // 기존 표시 경로는 프레임마다 full-size managed byte[]를 만들고 BGR 픽셀을 복사했다.
+                            // 1080p 기준 프레임당 약 6MB라서 LOH 유입이 빠르게 늘고 Gen2 GC가 자주 발생했다.
+                            // 이제 UI 표시용 프레임은 unmanaged buffer를 소유하고, WPF는 WritePixels(IntPtr)로
+                            // 바로 읽는다. 그래서 표시만 하는 스트림에서는 매 프레임 managed 대형 배열
+                            // 할당과 native->managed 복사를 피할 수 있다.
+                            var capturedAt = DateTime.UtcNow;
+                            var displayFrame = new RtspFrame(displayBuffer, dstBufSize, w, h, capturedAt, ptsSeconds);
+                            bool displayFrameHandedOff = false;
+                            try
+                            {
+                                if (FrameCaptured != null)
+                                {
+                                    FrameCaptured.Invoke(this, displayFrame);
+                                    displayFrameHandedOff = true;
+                                }
 
-                            var rtspFrame = new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds);
-
-                            FrameCaptured?.Invoke(this, rtspFrame);
-                            _channel.Writer.TryWrite(rtspFrame);
-
+                                // 현재 추론 API는 byte[] 입력을 사용하므로 추론이 켜진 경우에만
+                                // managed 버퍼를 만든다. 추론 OFF 스트림은 UI 표시 경로만 타면서
+                                // LOH를 자극하는 대형 byte[] 생성을 하지 않는다.
+                                if (_readerFramesEnabled)
+                                {
+                                    byte[] managed = new byte[dstBufSize];
+                                    Marshal.Copy(displayBuffer, managed, 0, dstBufSize);
+                                    _channel.Writer.TryWrite(new RtspFrame(managed, w, h, capturedAt, ptsSeconds));
+                                }
+                            }
+                            finally
+                            {
+                                if (!displayFrameHandedOff)
+                                {
+                                    displayFrame.Dispose();
+                                }
+                            }
                             ffmpeg.av_frame_unref(frame);
                         }
                     }
@@ -558,10 +582,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 if (swsCtx != null)
                 {
                     ffmpeg.sws_freeContext(swsCtx);
-                }
-                if (dstBuffer != null)
-                {
-                    ffmpeg.av_free(dstBuffer);
                 }
                 ffmpeg.av_frame_free(&frame);
             }

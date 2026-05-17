@@ -587,6 +587,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _inferenceFpsCounter.Reset();
 
                 _source = new RtspFrameSource(RtspUrl);
+                _source.ReaderFramesEnabled = _isInferenceEnabled;
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
 
@@ -623,6 +624,10 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 return;
             }
+            if (_source != null)
+            {
+                _source.ReaderFramesEnabled = true;
+            }
             _inferenceCts = new CancellationTokenSource();
             CancellationToken token = _inferenceCts.Token;
             _inferenceTask = Task.Run(() => InferenceLoopAsync(token));
@@ -633,6 +638,10 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             try
             {
+                if (_source != null)
+                {
+                    _source.ReaderFramesEnabled = false;
+                }
                 _inferenceCts?.Cancel();
             }
             catch
@@ -721,8 +730,15 @@ namespace Vision.MultiStream.Inference.ViewModels
             _displayFpsCounter.Tick(out double fps);
             _dispatcher.BeginInvoke(() =>
             {
-                RenderFrameToBitmap(frame);
-                DisplayFps = fps;
+                try
+                {
+                    RenderFrameToBitmap(frame);
+                    DisplayFps = fps;
+                }
+                finally
+                {
+                    frame.Dispose();
+                }
             }, DispatcherPriority.Render);
         }
 
@@ -739,11 +755,15 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
 
             int stride = frame.Width * 3;
-            _imageSource!.WritePixels(
-                new Int32Rect(0, 0, frame.Width, frame.Height),
-                frame.BgrPixels,
-                stride,
-                0);
+            var rect = new Int32Rect(0, 0, frame.Width, frame.Height);
+            if (frame.HasUnmanagedBuffer)
+            {
+                _imageSource!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
+            }
+            else
+            {
+                _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
+            }
         }
 
         private async Task InferenceLoopAsync(CancellationToken ct)
