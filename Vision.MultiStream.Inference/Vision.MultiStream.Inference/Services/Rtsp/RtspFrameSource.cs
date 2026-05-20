@@ -214,6 +214,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                     // ---- Video codec open ----
                     AVStream* vStream = fmtCtx->streams[videoStreamIndex];
                     AVCodec* vCodec = ffmpeg.avcodec_find_decoder(vStream->codecpar->codec_id);
+
+                    // 어떤 포맷으로 압축되어 오는지 확인 가능
+                    string codecName = ffmpeg.avcodec_get_name(vStream->codecpar->codec_id);
                     if (vCodec == null)
                     {
                         // 비디오 디코더 못 찾으면 오디오도 비활성화됨
@@ -448,6 +451,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                         {
                             // 디코더에서 프레임을 받음. 아직 처리할 프레임이 없으면 EAGAIN, 스트림 끝나면 EOF 반환.
                             int ret = ffmpeg.avcodec_receive_frame(codecCtx, frame); // 비디오의 경우: frame->data[0]=Y평면, data[1]=U평면, data[2]=V평면, frame->width/height/format 등
+
+                            string pixFmt = ffmpeg.av_get_pix_fmt_name((AVPixelFormat)frame->format) ?? "unknown";
                             if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
                             {
                                 break;
@@ -489,6 +494,24 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                             int w = frame->width;
                             int h = frame->height;
+
+                            /*
+
+                            1. sws_getContext(...)
+                                현재 frame->format의 디코딩 결과를 BGR24로 바꾸기 위한 변환기 생성/재사용
+                            2. av_image_get_buffer_size(...)
+                                BGR24 한 프레임을 담는 데 필요한 버퍼 크기 계산
+                            3. Marshal.AllocHGlobal(dstBufSize)
+                                변환 결과를 담을 메모리 확보
+                            4. av_image_fill_arrays(...)
+                                그 메모리를 FFmpeg가 쓸 수 있는 “출력 이미지 버퍼 구조”로 연결
+                            5. sws_scale(...)
+                                실제 변환 수행
+                                frame->data / frame->linesize
+                                ->
+                                dstData / dstLinesize
+
+                             */
 
                             // 첫 프레임 또는 해상도 변경 시 sws context 재할당
                             if (swsCtx == null || w != knownW || h != knownH)
@@ -648,12 +671,34 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 break;
                             }
 
+
+                            /*
+
+                            1. 입력 오디오 형식 확인
+                                - frame->sample_rate
+                                - frame->ch_layout
+                                - (AVSampleFormat)frame->format
+                            2. 출력 오디오 형식 결정
+                                - outChLayout
+                                - outFormat
+                                - outSampleRate
+                            3. 입력 형식을 출력 형식으로 바꾸는 SwrContext 생성
+                                - swr_alloc_set_opts2(...)
+                            4. 실제 사용 가능하게 초기화
+                                - swr_init(swrCtx)
+
+                             */
+
+
                             // 첫 프레임 기준으로 swr 초기화
                             if (swrCtx == null)
                             {
                                 outSampleRate = frame->sample_rate;
                                 AVChannelLayout inChLayout = frame->ch_layout;
                                 SwrContext* swrLocal = null;
+
+                                // 입력: 현재 디코더가 준 오디오 포맷        
+                                // 출력: 우리가 스피커로 밀어 넣고 싶은 포맷
                                 int alloc = ffmpeg.swr_alloc_set_opts2(
                                     &swrLocal,
                                     &outChLayout, outFormat, outSampleRate,

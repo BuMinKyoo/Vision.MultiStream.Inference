@@ -321,3 +321,31 @@ ffmpeg -re -stream_loop -1 -i Video1.mp4 -c copy -f rtsp rtsp://localhost:8554/c
    - 여러 개 한 번에: `📋 일괄 추가` → URL 줄당 하나씩 붙여넣기
    - 비디오/오디오 토글: 타일별 또는 전체 버튼 (🎥/🔊)
    - 전체 시작/중지: 하단 `▶ 전체 시작` / `⏸ 전체 중지`
+
+---
+
+## 디코딩 흐름 정리
+
+- 디먹싱쓰레드(DemuxLoop)
+  -> RTSP연결(ffmpeg.avformat_open_input)
+  -> 스트림 몇개 읽어 데이터 파악(ffmpeg.avformat_find_stream_info)
+  --> 스트림 인덱스 확인
+  --> 비디오 있는지, 오디오 있는지 확인
+  --> 디코딩 할 수 있는 코덱인지 확인
+  --> 비디오 쓰레드 시작(VideoDecodeLoop)
+  --> 오디오 쓰레드 시작(AudioDecodeLoop)
+  --> rtsp에서 받은 패킷을 받아서 각쓰레드에 전달
+
+    - 비디오쓰레드
+      -> 큐에 있는 패킷을꺼내 디코더에 넣음(ffmpeg.avcodec_send_packet, 현재 압축된 포맷)
+      -> 디코더가 만들어준 frame을 꺼내씀(ffmpeg.avcodec_receive_frame, 압축 풀린 포맷 ,EX. YUV)
+      -> 오디오가 없으면 wallStartTicks 사용 / 오디오가 있으면 오디오 Ticks사용
+      -> 디코딩된 frame을 BGR24로 변환
+        --> 화면에 뿌리기
+      --> 추론에 넘기기
+
+    - 오디오쓰레드
+      -> 큐에 있는 패킷을꺼내 디코더에 넣음(ffmpeg.avcodec_send_packet, 현재 압축된 포맷)
+      -> 디코더가 만들어준 frame을 꺼내씀(ffmpeg.avcodec_receive_frame, 압축 풀린 포맷)
+      -> 디코딩된 오디오를 출력 장치에 넣기 좋은 포맷으로 변경(EX. S16)
+      -> 사운드카드가 페이싱하는 실제 오디오 재생 위치를 ticks로 삼는다
