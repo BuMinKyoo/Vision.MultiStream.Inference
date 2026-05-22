@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
@@ -31,9 +32,18 @@ namespace Vision.MultiStream.Inference.ViewModels
     /// </summary>
     public sealed class StreamItemViewModel : BaseViewModel, IDisposable
     {
+        private const int DisplayFrameQueueCapacity = 1;
+
         private readonly Func<InferenceDevice, IRtspFrameDetector> _detectorResolver;
         private readonly Action<StreamItemViewModel> _onRemoveRequested;
         private readonly Dispatcher _dispatcher;
+        private readonly Channel<DisplayFrameItem> _displayFrameChannel =
+            Channel.CreateBounded<DisplayFrameItem>(new BoundedChannelOptions(DisplayFrameQueueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true
+            });
 
         private string _name;
         private string _rtspUrl;
@@ -64,6 +74,8 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private readonly FpsCounter _displayFpsCounter = new();
         private readonly FpsCounter _inferenceFpsCounter = new();
+        private int _displayPumpScheduled;
+        private int _displayGeneration;
 
         public StreamItemViewModel(
             string name,
@@ -656,6 +668,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             try
             {
+                Interlocked.Increment(ref _displayGeneration);
+                DrainPendingDisplayFrames();
                 StopInferenceLoop();
                 StopAudioDiagTimer();
                 _audioOutput = null; // RtspFrameSource.Stop() 이 Dispose 까지 책임짐
@@ -695,6 +709,16 @@ namespace Vision.MultiStream.Inference.ViewModels
             _audioDiagTimer.Start();
         }
 
+        private void DrainPendingDisplayFrames()
+        {
+            while (_displayFrameChannel.Reader.TryRead(out DisplayFrameItem item))
+            {
+                item.Frame.Dispose();
+            }
+
+            Interlocked.Exchange(ref _displayPumpScheduled, 0);
+        }
+
         private void StopAudioDiagTimer()
         {
             if (_audioDiagTimer == null)
@@ -728,18 +752,59 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
         {
             _displayFpsCounter.Tick(out double fps);
-            _dispatcher.BeginInvoke(() =>
+            EnqueueDisplayFrame(frame, fps);
+        }
+
+        private void EnqueueDisplayFrame(RtspFrame frame, double fps)
+        {
+            var item = new DisplayFrameItem(frame, fps, Volatile.Read(ref _displayGeneration));
+            while (!_displayFrameChannel.Writer.TryWrite(item))
             {
-                try
+                if (_displayFrameChannel.Reader.TryRead(out DisplayFrameItem dropped))
                 {
-                    RenderFrameToBitmap(frame);
-                    DisplayFps = fps;
+                    dropped.Frame.Dispose();
+                    continue;
                 }
-                finally
+
+                frame.Dispose();
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _displayPumpScheduled, 1, 0) == 0)
+            {
+                _ = _dispatcher.BeginInvoke(DrainDisplayFrames, DispatcherPriority.Render);
+            }
+        }
+
+        private void DrainDisplayFrames()
+        {
+            try
+            {
+                while (_displayFrameChannel.Reader.TryRead(out DisplayFrameItem item))
                 {
-                    frame.Dispose();
+                    try
+                    {
+                        if (item.Generation == Volatile.Read(ref _displayGeneration))
+                        {
+                            RenderFrameToBitmap(item.Frame);
+                            DisplayFps = item.Fps;
+                        }
+                    }
+                    finally
+                    {
+                        item.Frame.Dispose();
+                    }
                 }
-            }, DispatcherPriority.Render);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _displayPumpScheduled, 0);
+                if (_displayFrameChannel.Reader.TryPeek(out _)
+                    && Interlocked.CompareExchange(ref _displayPumpScheduled, 1, 0) == 0)
+                {
+                    _ = _dispatcher.BeginInvoke(DrainDisplayFrames, DispatcherPriority.Render);
+                }
+            }
         }
 
         private void RenderFrameToBitmap(RtspFrame frame)
@@ -845,5 +910,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 fps = _lastFps;
             }
         }
+
+        private readonly record struct DisplayFrameItem(RtspFrame Frame, double Fps, int Generation);
     }
 }
