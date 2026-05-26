@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -14,7 +14,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
     ///
     /// FFmpeg 정석 3-쓰레드 모델:
     ///   Thread 1 (Demuxer)         : av_read_frame() 으로 RTSP 패킷 수신 후 비디오/오디오 큐로 분기.
-    ///   Thread 2 (Video Decoder)   : 비디오 큐 → H.264 디코딩 → sws_scale → BGR → RtspFrame.
+    ///   Thread 2 (Video Decoder)   : 비디오 큐 → H.264 디코딩 → 표시용 native frame 복사 / 추론용 sws_scale → BGR.
     ///   Thread 3 (Audio Decoder)   : 오디오 큐 → AAC/G.711 디코딩 → swr_resample → PCM s16 → IAudioOutput.
     ///
     /// 오디오 출력 정책:
@@ -412,13 +412,13 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         {
             /*
              
-             비디오:                   
-            큐: H.264 압축 (~50KB)    
-              ↓ avcodec_send_packet   
-              ↓ avcodec_receive_frame 
+             비디오:
+            큐: H.264 압축 (~50KB)
+              ↓ avcodec_send_packet
+              ↓ avcodec_receive_frame
             디코더 출력: YUV420P (3MB)
-              ↓ sws_scale (YUV→BGR)   
-            변환 결과: BGR24 (6MB)    
+              ↓ 표시용 native frame 복사 / 추론용 sws_scale (YUV→BGR)
+            변환 결과: 표시=원본 포맷 유지, 추론=BGR24
 
              */
 
@@ -429,9 +429,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             }
 
             AVFrame* frame = ffmpeg.av_frame_alloc();
-            SwsContext* swsCtx = null;
-            int dstBufSize = 0;
-            int knownW = 0, knownH = 0;
+            SwsContext* readerSwsCtx = null;
+            AVPixelFormat readerSourcePixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
+            int readerDstBufSize = 0;
+            int readerKnownW = 0;
+            int readerKnownH = 0;
 
             try
             {
@@ -452,7 +454,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                             // 디코더에서 프레임을 받음. 아직 처리할 프레임이 없으면 EAGAIN, 스트림 끝나면 EOF 반환.
                             int ret = ffmpeg.avcodec_receive_frame(codecCtx, frame); // 비디오의 경우: frame->data[0]=Y평면, data[1]=U평면, data[2]=V평면, frame->width/height/format 등
 
-                            string pixFmt = ffmpeg.av_get_pix_fmt_name((AVPixelFormat)frame->format) ?? "unknown";
                             if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
                             {
                                 break;
@@ -477,7 +478,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 TimeSpan delay = _clock.GetDelay(ptsSeconds);
                                 if (delay < TimeSpan.FromMilliseconds(-100))
                                 {
-                                    // 너무 늦음 → drop (sws_scale 비용도 절약)
+                                    // 너무 늦음 → drop (추론용 sws_scale 비용도 절약)
                                     ffmpeg.av_frame_unref(frame);
                                     continue;
                                 }
@@ -494,86 +495,143 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                             int w = frame->width;
                             int h = frame->height;
-
-                            /*
-
-                            1. sws_getContext(...)
-                                현재 frame->format의 디코딩 결과를 BGR24로 바꾸기 위한 변환기 생성/재사용
-                            2. av_image_get_buffer_size(...)
-                                BGR24 한 프레임을 담는 데 필요한 버퍼 크기 계산
-                            3. Marshal.AllocHGlobal(dstBufSize)
-                                변환 결과를 담을 메모리 확보
-                            4. av_image_fill_arrays(...)
-                                그 메모리를 FFmpeg가 쓸 수 있는 “출력 이미지 버퍼 구조”로 연결
-                            5. sws_scale(...)
-                                실제 변환 수행
-                                frame->data / frame->linesize
-                                ->
-                                dstData / dstLinesize
-
-                             */
-
-                            // 첫 프레임 또는 해상도 변경 시 sws context 재할당
-                            if (swsCtx == null || w != knownW || h != knownH)
-                            {
-                                if (swsCtx != null)
-                                {
-                                    ffmpeg.sws_freeContext(swsCtx);
-                                    swsCtx = null;
-                                }
-                                // SWS_BILINEAR == 2 (libswscale.h)
-                                swsCtx = ffmpeg.sws_getContext(
-                                    w, h, (AVPixelFormat)frame->format,
-                                    w, h, AVPixelFormat.AV_PIX_FMT_BGR24,
-                                    2, null, null, null);
-
-                                //  BGR24 한 프레임에 필요한 바이트 수 계산
-                                dstBufSize = ffmpeg.av_image_get_buffer_size(
-                                    AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
-
-                                knownW = w;
-                                knownH = h;
-                            }
-
-                            // "색공간 변환기 + 화면용 포맷 정리기"
-                            // 압축 풀린 픽셀의 모양을 바꾸는 작업
-                            IntPtr displayBuffer = Marshal.AllocHGlobal(dstBufSize);
-                            byte_ptrArray4 dstData = default;
-                            int_array4 dstLinesize = default;
-                            ffmpeg.av_image_fill_arrays(
-                                ref dstData, ref dstLinesize, (byte*)displayBuffer,
-                                AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
-
-                            ffmpeg.sws_scale(
-                                swsCtx,
-                                frame->data, frame->linesize,
-                                0, h,
-                                dstData, dstLinesize);
-
-                            // GC 스파이크 완화:
-                            // 기존 표시 경로는 프레임마다 full-size managed byte[]를 만들고 BGR 픽셀을 복사했다.
-                            // 1080p 기준 프레임당 약 6MB라서 LOH 유입이 빠르게 늘고 Gen2 GC가 자주 발생했다.
-                            // 이제 UI 표시용 프레임은 unmanaged buffer를 소유하고, WPF는 WritePixels(IntPtr)로
-                            // 바로 읽는다. 그래서 표시만 하는 스트림에서는 매 프레임 managed 대형 배열
-                            // 할당과 native->managed 복사를 피할 수 있다.
-                            var capturedAt = DateTime.UtcNow;
-                            var displayFrame = new RtspFrame(displayBuffer, dstBufSize, w, h, capturedAt, ptsSeconds);
+                            AVPixelFormat framePixelFormat = (AVPixelFormat)frame->format;
+                            DateTime capturedAt = DateTime.UtcNow;
+                            RtspFrame? displayFrame = null;
                             bool displayFrameHandedOff = false;
                             try
                             {
                                 if (FrameCaptured != null)
                                 {
-                                    FrameCaptured.Invoke(this, displayFrame);
-                                    displayFrameHandedOff = true;
+                                    int nativeBufSize = ffmpeg.av_image_get_buffer_size(
+                                        framePixelFormat,
+                                        w,
+                                        h,
+                                        1);
+
+                                    if (nativeBufSize > 0)
+                                    {
+                                        IntPtr displayBuffer = Marshal.AllocHGlobal(nativeBufSize);
+                                        byte_ptrArray4 copiedData = default;
+                                        int_array4 copiedLineSizes = default;
+                                        ffmpeg.av_image_fill_arrays(
+                                            ref copiedData,
+                                            ref copiedLineSizes,
+                                            (byte*)displayBuffer,
+                                            framePixelFormat,
+                                            w,
+                                            h,
+                                            1);
+
+                                        byte_ptrArray4 srcData = default;
+                                        int_array4 srcLineSizes = default;
+                                        for (uint i = 0; i < 4; i++)
+                                        {
+                                            srcData[i] = frame->data[i];
+                                            srcLineSizes[i] = frame->linesize[i];
+                                        }
+
+                                        ffmpeg.av_image_copy(
+                                            ref copiedData,
+                                            in copiedLineSizes,
+                                            in srcData,
+                                            in srcLineSizes,
+                                            framePixelFormat,
+                                            w,
+                                            h);
+
+                                        int[] lineSizes =
+                                        {
+                                            copiedLineSizes[(uint)0],
+                                            copiedLineSizes[(uint)1],
+                                            copiedLineSizes[(uint)2],
+                                            copiedLineSizes[(uint)3]
+                                        };
+
+                                        int[] planeOffsets = new int[4];
+                                        byte* displayBase = (byte*)displayBuffer;
+                                        for (int i = 0; i < 4; i++)
+                                        {
+                                            planeOffsets[i] = copiedData[(uint)i] == null
+                                                ? 0
+                                                : (int)(copiedData[(uint)i] - displayBase);
+                                        }
+
+                                        displayFrame = new RtspFrame(
+                                            displayBuffer,
+                                            nativeBufSize,
+                                            w,
+                                            h,
+                                            capturedAt,
+                                            ptsSeconds,
+                                            framePixelFormat,
+                                            lineSizes,
+                                            planeOffsets);
+
+                                        FrameCaptured.Invoke(this, displayFrame);
+                                        displayFrameHandedOff = true;
+                                    }
                                 }
 
-                                // 현재 추론 API는 byte[] 입력을 사용하므로 추론이 켜진 경우에만
-                                // managed 버퍼를 만든다. 추론 OFF 스트림은 UI 표시 경로만 타면서
-                                // LOH를 자극하는 대형 byte[] 생성을 하지 않는다.
                                 if (_readerFramesEnabled)
                                 {
-                                    byte[] managed = new byte[dstBufSize];
-                                    Marshal.Copy(displayBuffer, managed, 0, dstBufSize);
+                                    if (readerSwsCtx == null
+                                        || w != readerKnownW
+                                        || h != readerKnownH
+                                        || readerSourcePixelFormat != framePixelFormat)
+                                    {
+                                        if (readerSwsCtx != null)
+                                        {
+                                            ffmpeg.sws_freeContext(readerSwsCtx);
+                                            readerSwsCtx = null;
+                                        }
+
+                                        readerSwsCtx = ffmpeg.sws_getContext(
+                                            w,
+                                            h,
+                                            framePixelFormat,
+                                            w,
+                                            h,
+                                            AVPixelFormat.AV_PIX_FMT_BGR24,
+                                            2,
+                                            null,
+                                            null,
+                                            null);
+
+                                        readerDstBufSize = ffmpeg.av_image_get_buffer_size(
+                                            AVPixelFormat.AV_PIX_FMT_BGR24,
+                                            w,
+                                            h,
+                                            1);
+                                        readerKnownW = w;
+                                        readerKnownH = h;
+                                        readerSourcePixelFormat = framePixelFormat;
+                                    }
+
+                                    byte[] managed = new byte[readerDstBufSize];
+                                    fixed (byte* managedPtr = managed)
+                                    {
+                                        byte_ptrArray4 dstData = default;
+                                        int_array4 dstLineSizes = default;
+                                        ffmpeg.av_image_fill_arrays(
+                                            ref dstData,
+                                            ref dstLineSizes,
+                                            managedPtr,
+                                            AVPixelFormat.AV_PIX_FMT_BGR24,
+                                            w,
+                                            h,
+                                            1);
+
+                                        ffmpeg.sws_scale(
+                                            readerSwsCtx,
+                                            frame->data,
+                                            frame->linesize,
+                                            0,
+                                            h,
+                                            dstData,
+                                            dstLineSizes);
+                                    }
+
                                     _channel.Writer.TryWrite(new RtspFrame(managed, w, h, capturedAt, ptsSeconds));
                                 }
                             }
@@ -581,7 +639,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                             {
                                 if (!displayFrameHandedOff)
                                 {
-                                    displayFrame.Dispose();
+                                    displayFrame?.Dispose();
                                 }
                             }
                             ffmpeg.av_frame_unref(frame);
@@ -602,9 +660,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             }
             finally
             {
-                if (swsCtx != null)
+                if (readerSwsCtx != null)
                 {
-                    ffmpeg.sws_freeContext(swsCtx);
+                    ffmpeg.sws_freeContext(readerSwsCtx);
                 }
                 ffmpeg.av_frame_free(&frame);
             }
