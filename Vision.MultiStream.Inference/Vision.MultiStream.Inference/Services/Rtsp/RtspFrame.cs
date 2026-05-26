@@ -1,20 +1,18 @@
 using System;
-using FFmpeg.AutoGen;
 
 namespace Vision.MultiStream.Inference.Services.Rtsp
 {
     /// <summary>
-    /// RTSP 수신 스레드가 디코딩해 전달하는 단일 프레임.
-    /// 표시 latest-slot 최적화를 위해 managed/unmanaged BGR 뿐 아니라 원본 pixel format도 보존한다.
+    /// RTSP 수신 스레드가 디코딩해서 넘기는 한 프레임 단위.
+    /// BGR row-major 픽셀을 managed byte[] 또는 unmanaged buffer 형태로 담는다.
     /// </summary>
     public sealed class RtspFrame : IDisposable
     {
         private byte[]? _bgrPixels;
-        private IntPtr _pixelBuffer;
-        private readonly int[]? _planeOffsets;
-        private readonly int[]? _lineSizes;
+        private IntPtr _bgrBuffer;
         private bool _disposed;
 
+        // managed BGR 프레임. 현재 추론 channel 경로에서 사용한다.
         public RtspFrame(byte[] bgrPixels, int width, int height, DateTime capturedAt, double ptsSeconds)
         {
             _bgrPixels = bgrPixels;
@@ -22,53 +20,17 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             Height = height;
             CapturedAt = capturedAt;
             PtsSeconds = ptsSeconds;
-            PixelFormat = AVPixelFormat.AV_PIX_FMT_BGR24;
         }
 
+        // unmanaged BGR 프레임. UI 표시 경로에서 매 프레임 대형 byte[] 할당을 피하기 위해 사용한다.
         public RtspFrame(IntPtr bgrBuffer, int bufferSize, int width, int height, DateTime capturedAt, double ptsSeconds)
-            : this(
-                bgrBuffer,
-                bufferSize,
-                width,
-                height,
-                capturedAt,
-                ptsSeconds,
-                AVPixelFormat.AV_PIX_FMT_BGR24,
-                new[] { width * 3, 0, 0, 0 },
-                new[] { 0, 0, 0, 0 })
         {
-        }
-
-        public RtspFrame(
-            IntPtr pixelBuffer,
-            int bufferSize,
-            int width,
-            int height,
-            DateTime capturedAt,
-            double ptsSeconds,
-            AVPixelFormat pixelFormat,
-            int[] lineSizes,
-            int[] planeOffsets)
-        {
-            if (lineSizes.Length != 4)
-            {
-                throw new ArgumentException("lineSizes must contain exactly 4 items.", nameof(lineSizes));
-            }
-
-            if (planeOffsets.Length != 4)
-            {
-                throw new ArgumentException("planeOffsets must contain exactly 4 items.", nameof(planeOffsets));
-            }
-
-            _pixelBuffer = pixelBuffer;
+            _bgrBuffer = bgrBuffer;
             BufferSize = bufferSize;
             Width = width;
             Height = height;
             CapturedAt = capturedAt;
             PtsSeconds = ptsSeconds;
-            PixelFormat = pixelFormat;
-            _lineSizes = (int[])lineSizes.Clone();
-            _planeOffsets = (int[])planeOffsets.Clone();
         }
 
         public byte[] BgrPixels
@@ -81,35 +43,15 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 }
 
                 throw new InvalidOperationException(
-                    "This frame does not expose managed BGR pixels.");
+                    "This frame uses an unmanaged BGR buffer. Use BgrBuffer instead of BgrPixels.");
             }
         }
 
-        public IntPtr BgrBuffer
-        {
-            get
-            {
-                if (HasUnmanagedBgrBuffer)
-                {
-                    return _pixelBuffer;
-                }
-
-                throw new InvalidOperationException(
-                    "This frame does not expose an unmanaged BGR24 buffer.");
-            }
-        }
+        public IntPtr BgrBuffer => _bgrBuffer;
 
         public int BufferSize { get; }
 
-        public bool HasManagedBgrPixels => _bgrPixels != null;
-
-        public bool HasUnmanagedBuffer => HasUnmanagedBgrBuffer;
-
-        public bool HasUnmanagedBgrBuffer => PixelFormat == AVPixelFormat.AV_PIX_FMT_BGR24 && _pixelBuffer != IntPtr.Zero;
-
-        public bool HasNativePixelBuffer => _pixelBuffer != IntPtr.Zero;
-
-        public AVPixelFormat PixelFormat { get; }
+        public bool HasUnmanagedBuffer => _bgrBuffer != IntPtr.Zero;
 
         public int Width { get; }
 
@@ -117,23 +59,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         public DateTime CapturedAt { get; }
 
+        // PTS가 NOPTS 또는 미지원이면 double.NaN.
         public double PtsSeconds { get; }
-
-        public unsafe void FillVideoData(ref byte_ptrArray4 data, ref int_array4 lineSizes)
-        {
-            if (_pixelBuffer == IntPtr.Zero || _planeOffsets == null || _lineSizes == null)
-            {
-                throw new InvalidOperationException("This frame does not own an unmanaged pixel buffer.");
-            }
-
-            byte* basePtr = (byte*)_pixelBuffer;
-            for (int i = 0; i < 4; i++)
-            {
-                uint index = (uint)i;
-                data[index] = _lineSizes[i] > 0 ? basePtr + _planeOffsets[i] : null;
-                lineSizes[index] = _lineSizes[i];
-            }
-        }
 
         public void Dispose()
         {
@@ -143,10 +70,10 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             }
 
             _disposed = true;
-            if (_pixelBuffer != IntPtr.Zero)
+            if (_bgrBuffer != IntPtr.Zero)
             {
-                System.Runtime.InteropServices.Marshal.FreeHGlobal(_pixelBuffer);
-                _pixelBuffer = IntPtr.Zero;
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(_bgrBuffer);
+                _bgrBuffer = IntPtr.Zero;
             }
         }
     }

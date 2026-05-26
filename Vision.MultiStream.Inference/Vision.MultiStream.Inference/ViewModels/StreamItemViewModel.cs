@@ -37,7 +37,6 @@ namespace Vision.MultiStream.Inference.ViewModels
         private readonly Func<InferenceDevice, IRtspFrameDetector> _detectorResolver;
         private readonly Action<StreamItemViewModel> _onRemoveRequested;
         private readonly Dispatcher _dispatcher;
-        private readonly RtspDisplayFrameConverter _displayFrameConverter = new();
         private readonly Channel<DisplayFrameItem> _displayFrameChannel =
             Channel.CreateBounded<DisplayFrameItem>(new BoundedChannelOptions(DisplayFrameQueueCapacity)
             {
@@ -573,7 +572,6 @@ namespace Vision.MultiStream.Inference.ViewModels
                 ImageSource = null;
                 ImageWidth = 0;
                 ImageHeight = 0;
-                _displayFrameConverter.Reset();
                 DisplayFps = 0;
                 InferenceFps = 0;
                 PreprocessMs = 0;
@@ -690,7 +688,6 @@ namespace Vision.MultiStream.Inference.ViewModels
                 AudioFillRatio = 0;
                 AudioDropPercent = 0;
                 AudioTotalDroppedMs = 0;
-                _displayFrameConverter.Reset();
             }
             catch
             {
@@ -754,12 +751,13 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
         {
-            EnqueueDisplayFrame(frame);
+            _displayFpsCounter.Tick(out double fps);
+            EnqueueDisplayFrame(frame, fps);
         }
 
-        private void EnqueueDisplayFrame(RtspFrame frame)
+        private void EnqueueDisplayFrame(RtspFrame frame, double fps)
         {
-            var item = new DisplayFrameItem(frame, Volatile.Read(ref _displayGeneration));
+            var item = new DisplayFrameItem(frame, fps, Volatile.Read(ref _displayGeneration));
             while (!_displayFrameChannel.Writer.TryWrite(item))
             {
                 if (_displayFrameChannel.Reader.TryRead(out DisplayFrameItem dropped))
@@ -789,8 +787,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                         if (item.Generation == Volatile.Read(ref _displayGeneration))
                         {
                             RenderFrameToBitmap(item.Frame);
-                            _displayFpsCounter.Tick(out double fps);
-                            DisplayFps = fps;
+                            DisplayFps = item.Fps;
                         }
                     }
                     finally
@@ -824,18 +821,13 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             int stride = frame.Width * 3;
             var rect = new Int32Rect(0, 0, frame.Width, frame.Height);
-            if (frame.HasUnmanagedBgrBuffer)
+            if (frame.HasUnmanagedBuffer)
             {
                 _imageSource!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
             }
-            else if (frame.HasManagedBgrPixels)
-            {
-                _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
-            }
             else
             {
-                IntPtr bgrBuffer = _displayFrameConverter.ConvertToBgr24(frame, out int bufferSize, out stride);
-                _imageSource!.WritePixels(rect, bgrBuffer, bufferSize, stride);
+                _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
             }
         }
 
@@ -888,7 +880,6 @@ namespace Vision.MultiStream.Inference.ViewModels
         public void Dispose()
         {
             StopAll();
-            _displayFrameConverter.Dispose();
         }
 
         private sealed class FpsCounter
@@ -920,6 +911,6 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        private readonly record struct DisplayFrameItem(RtspFrame Frame, int Generation);
+        private readonly record struct DisplayFrameItem(RtspFrame Frame, double Fps, int Generation);
     }
 }
