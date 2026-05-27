@@ -55,6 +55,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private readonly MediaClock _clock = new();
 
         private volatile bool _readerFramesEnabled;
+        private volatile bool _useYuvDisplayFrames;
 
         public RtspFrameSource(string rtspUrl)
         {
@@ -74,7 +75,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             get => _readerFramesEnabled;
             set => _readerFramesEnabled = value;
         }
-        public bool UseYuvDisplayFrames { get; set; }
+        public bool UseYuvDisplayFrames
+        {
+            get => _useYuvDisplayFrames;
+            set => _useYuvDisplayFrames = value;
+        }
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<RtspFrame>? FrameCaptured;
         public event EventHandler<RtspYuvFrame>? YuvFrameCaptured;
