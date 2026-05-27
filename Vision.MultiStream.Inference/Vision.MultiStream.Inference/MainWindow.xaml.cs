@@ -18,7 +18,6 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _gpuEngine;
         private SnapshotViewModel? _snapshotVm;
         private MultiStreamViewModel? _multiStreamVm;
-        private Mp3PlayerViewModel? _mp3PlayerVm;
         private PerformanceViewModel? _performanceVm;
 
         public MainWindow()
@@ -54,16 +53,14 @@ namespace Vision.MultiStream.Inference
 
                 _snapshotVm = new SnapshotViewModel(snapshotDetector);
                 _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector);
-                _mp3PlayerVm = new Mp3PlayerViewModel();
                 _performanceVm = new PerformanceViewModel();
 
-                DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _mp3PlayerVm, _performanceVm);
+                DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _performanceVm);
 
                 Closed += (_, _) =>
                 {
                     _snapshotVm?.Dispose();
                     _multiStreamVm?.Dispose();
-                    _mp3PlayerVm?.Dispose();
                     _performanceVm?.Dispose();
                     _cpuEngine?.Dispose();
                     _dmlEngine?.Dispose();
