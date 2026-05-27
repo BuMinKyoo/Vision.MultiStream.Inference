@@ -74,8 +74,10 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             get => _readerFramesEnabled;
             set => _readerFramesEnabled = value;
         }
+        public bool UseYuvDisplayFrames { get; set; }
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<RtspFrame>? FrameCaptured;
+        public event EventHandler<RtspYuvFrame>? YuvFrameCaptured;
 
         /// <summary>
         /// 비디오 디코딩 + FrameCaptured/Reader 출력은 항상 활성화된다.
@@ -495,6 +497,24 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                             int w = frame->width;
                             int h = frame->height;
+                            var capturedAt = DateTime.UtcNow;
+
+                            if (UseYuvDisplayFrames
+                                && YuvFrameCaptured != null
+                                && IsYuv420Frame(frame))
+                            {
+                                using (PerfProbe.Measure("rtsp.yuv420.copy"))
+                                {
+                                    YuvFrameCaptured.Invoke(this, CopyYuv420Frame(frame, capturedAt, ptsSeconds));
+                                }
+
+                                // 추론이 꺼져 있으면 _readerFramesEnabled == false라서 바로 continue
+                                if (!_readerFramesEnabled)
+                                {
+                                    ffmpeg.av_frame_unref(frame);
+                                    continue;
+                                }
+                            }
 
                             /*
 
@@ -560,7 +580,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                             // 이제 UI 표시용 프레임은 unmanaged buffer를 소유하고, WPF는 WritePixels(IntPtr)로
                             // 바로 읽는다. 그래서 표시만 하는 스트림에서는 매 프레임 managed 대형 배열
                             // 할당과 native->managed 복사를 피할 수 있다.
-                            var capturedAt = DateTime.UtcNow;
                             var displayFrame = new RtspFrame(displayBuffer, dstBufSize, w, h, capturedAt, ptsSeconds);
                             bool displayFrameHandedOff = false;
                             try
@@ -615,6 +634,53 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 }
                 ffmpeg.av_frame_free(&frame);
             }
+        }
+
+        private static bool IsYuv420Frame(AVFrame* frame)
+        {
+            AVPixelFormat format = (AVPixelFormat)frame->format;
+            return format == AVPixelFormat.AV_PIX_FMT_YUV420P
+                || format == AVPixelFormat.AV_PIX_FMT_YUVJ420P;
+        }
+
+        private static RtspYuvFrame CopyYuv420Frame(AVFrame* frame, DateTime capturedAt, double ptsSeconds)
+        {
+            int width = frame->width;
+            int height = frame->height;
+            int chromaWidth = (width + 1) / 2;
+            int chromaHeight = (height + 1) / 2;
+
+            byte[] yPlane = CopyPlane(frame->data[0], frame->linesize[0], width, height);
+            byte[] uPlane = CopyPlane(frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
+            byte[] vPlane = CopyPlane(frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
+
+            return new RtspYuvFrame(
+                yPlane,
+                uPlane,
+                vPlane,
+                width,
+                height,
+                width,
+                chromaWidth,
+                chromaWidth,
+                capturedAt,
+                ptsSeconds);
+        }
+
+        private static byte[] CopyPlane(byte* source, int sourceStride, int width, int height)
+        {
+            byte[] plane = new byte[width * height];
+            fixed (byte* destinationBase = plane)
+            {
+                byte* destination = destinationBase;
+                for (int y = 0; y < height; y++)
+                {
+                    Buffer.MemoryCopy(source + (y * sourceStride), destination, width, width);
+                    destination += width;
+                }
+            }
+
+            return plane;
         }
 
         // ========== Thread 3 : Audio Decoder ==========

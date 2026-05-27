@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Vision.MultiStream.Inference.Common;
 using Vision.MultiStream.Inference.Models;
+using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Audio;
 using Vision.MultiStream.Inference.Services.Rtsp;
 using Vision.MultiStream.Inference.Services.Yolo;
@@ -52,7 +53,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
         private string _statusMessage = "대기";
-        private WriteableBitmap? _imageSource;
+        private ImageSource? _imageSource;
+        private WriteableBitmap? _writeableBitmap;
         private int _imageWidth;
         private int _imageHeight;
         private double _displayFps;
@@ -67,6 +69,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private int _audioTotalDroppedMs;
 
         private RtspFrameSource? _source;
+        private D3DImageYuvPresenter? _d3dPresenter;
         private IAudioOutput? _audioOutput;
         private CancellationTokenSource? _inferenceCts;
         private Task? _inferenceTask;
@@ -75,7 +78,9 @@ namespace Vision.MultiStream.Inference.ViewModels
         private readonly FpsCounter _displayFpsCounter = new();
         private readonly FpsCounter _inferenceFpsCounter = new();
         private int _displayPumpScheduled;
+        private int _yuvDisplayPumpScheduled;
         private int _displayGeneration;
+        private RtspYuvFrame? _latestYuvFrame;
 
         public StreamItemViewModel(
             string name,
@@ -264,7 +269,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        public WriteableBitmap? ImageSource
+        public ImageSource? ImageSource
         {
             get => _imageSource;
             private set
@@ -570,6 +575,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 Detections.Clear();
                 ImageSource = null;
+                _writeableBitmap = null;
                 ImageWidth = 0;
                 ImageHeight = 0;
                 DisplayFps = 0;
@@ -600,8 +606,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                 _source = new RtspFrameSource(RtspUrl);
                 _source.ReaderFramesEnabled = _isInferenceEnabled;
+                _source.UseYuvDisplayFrames = true;
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
+                _source.YuvFrameCaptured += OnYuvFrameCapturedForDisplay;
 
                 // 오디오 출력은 항상 생성. 토글 OFF 상태면 muted 로 시작.
                 // 디코더는 스트림에 오디오 트랙이 있으면 가동, 없으면 자동으로 안 띄움.
@@ -670,6 +678,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 Interlocked.Increment(ref _displayGeneration);
                 DrainPendingDisplayFrames();
+                Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
+                _latestYuvFrame = null;
                 StopInferenceLoop();
                 StopAudioDiagTimer();
                 _audioOutput = null; // RtspFrameSource.Stop() 이 Dispose 까지 책임짐
@@ -677,6 +687,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (_source != null)
                 {
                     _source.FrameCaptured -= OnFrameCapturedForDisplay;
+                    _source.YuvFrameCaptured -= OnYuvFrameCapturedForDisplay;
                     _source.StatusChanged -= OnSourceStatusChanged;
                     _source.Stop();
                     _source.Dispose();
@@ -688,6 +699,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 AudioFillRatio = 0;
                 AudioDropPercent = 0;
                 AudioTotalDroppedMs = 0;
+                _d3dPresenter?.Dispose();
+                _d3dPresenter = null;
             }
             catch
             {
@@ -751,10 +764,63 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
         {
+            if (_d3dPresenter != null)
+            {
+                frame.Dispose();
+                return;
+            }
+
             using (PerfProbe.Measure("display.enqueue"))
             {
                 _displayFpsCounter.Tick(out double fps);
                 EnqueueDisplayFrame(frame, fps);
+            }
+        }
+
+        private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
+        {
+            _latestYuvFrame = frame;
+            if (Interlocked.CompareExchange(ref _yuvDisplayPumpScheduled, 1, 0) == 0)
+            {
+                _dispatcher.BeginInvoke(DrainYuvDisplayFrame, DispatcherPriority.Render);
+            }
+        }
+
+        private void DrainYuvDisplayFrame()
+        {
+            try
+            {
+                RtspYuvFrame? frame = Interlocked.Exchange(ref _latestYuvFrame, null);
+                if (frame == null)
+                {
+                    return;
+                }
+
+                using (PerfProbe.Measure("display.d3d.present"))
+                {
+                    _displayFpsCounter.Tick(out double fps);
+                    _d3dPresenter ??= new D3DImageYuvPresenter();
+                    ImageSource = _d3dPresenter.Image;
+                    ImageWidth = frame.Width;
+                    ImageHeight = frame.Height;
+                    _d3dPresenter.Render(frame);
+                    DisplayFps = fps;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[D3DImageYuvPresenter] fallback to WriteableBitmap: {ex}");
+                if (_source != null)
+                {
+                    _source.UseYuvDisplayFrames = false;
+                }
+                _d3dPresenter?.Dispose();
+                _d3dPresenter = null;
+                _writeableBitmap = null;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
             }
         }
 
@@ -816,11 +882,13 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void RenderFrameToBitmap(RtspFrame frame)
         {
             if (_imageSource == null
-                || _imageSource.PixelWidth != frame.Width
-                || _imageSource.PixelHeight != frame.Height)
+                || _writeableBitmap == null
+                || _writeableBitmap.PixelWidth != frame.Width
+                || _writeableBitmap.PixelHeight != frame.Height)
             {
-                ImageSource = new WriteableBitmap(
+                _writeableBitmap = new WriteableBitmap(
                     frame.Width, frame.Height, 96, 96, PixelFormats.Bgr24, null);
+                ImageSource = _writeableBitmap;
                 ImageWidth = frame.Width;
                 ImageHeight = frame.Height;
             }
@@ -831,14 +899,14 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 using (PerfProbe.Measure("display.write_pixels.unmanaged"))
                 {
-                    _imageSource!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
+                    _writeableBitmap!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
                 }
             }
             else
             {
                 using (PerfProbe.Measure("display.write_pixels.managed"))
                 {
-                    _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
+                    _writeableBitmap!.WritePixels(rect, frame.BgrPixels, stride, 0);
                 }
             }
         }

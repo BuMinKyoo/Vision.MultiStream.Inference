@@ -23,6 +23,9 @@
 
     <!-- RTSP 비디오/오디오 디코딩용 FFmpeg.AutoGen (FFmpeg 8.x 바인딩) -->
     <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <PackageReference Include="Vortice.Direct3D9" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
     <!-- 디코딩한 PCM 을 스피커로 출력 -->
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
