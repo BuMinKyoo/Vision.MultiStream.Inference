@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Channels;
 using FFmpeg.AutoGen;
+using Vision.MultiStream.Inference.Common;
 using Vision.MultiStream.Inference.Services.Audio;
 using Vision.MultiStream.Inference.Services.Rtsp.FFmpeg;
 
@@ -544,11 +545,14 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                                 ref dstData, ref dstLinesize, (byte*)displayBuffer,
                                 AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
 
-                            ffmpeg.sws_scale(
-                                swsCtx,
-                                frame->data, frame->linesize,
-                                0, h,
-                                dstData, dstLinesize);
+                            using (PerfProbe.Measure("rtsp.sws_scale.bgr24"))
+                            {
+                                ffmpeg.sws_scale(
+                                    swsCtx,
+                                    frame->data, frame->linesize,
+                                    0, h,
+                                    dstData, dstLinesize);
+                            }
 
                             // GC 스파이크 완화:
                             // 기존 표시 경로는 프레임마다 full-size managed byte[]를 만들고 BGR 픽셀을 복사했다.
@@ -563,7 +567,10 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                             {
                                 if (FrameCaptured != null)
                                 {
-                                    FrameCaptured.Invoke(this, displayFrame);
+                                    using (PerfProbe.Measure("rtsp.frame_captured.invoke"))
+                                    {
+                                        FrameCaptured.Invoke(this, displayFrame);
+                                    }
                                     displayFrameHandedOff = true;
                                 }
 

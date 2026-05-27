@@ -751,8 +751,11 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
         {
-            _displayFpsCounter.Tick(out double fps);
-            EnqueueDisplayFrame(frame, fps);
+            using (PerfProbe.Measure("display.enqueue"))
+            {
+                _displayFpsCounter.Tick(out double fps);
+                EnqueueDisplayFrame(frame, fps);
+            }
         }
 
         private void EnqueueDisplayFrame(RtspFrame frame, double fps)
@@ -786,7 +789,10 @@ namespace Vision.MultiStream.Inference.ViewModels
                     {
                         if (item.Generation == Volatile.Read(ref _displayGeneration))
                         {
-                            RenderFrameToBitmap(item.Frame);
+                            using (PerfProbe.Measure("display.render_frame"))
+                            {
+                                RenderFrameToBitmap(item.Frame);
+                            }
                             DisplayFps = item.Fps;
                         }
                     }
@@ -823,11 +829,17 @@ namespace Vision.MultiStream.Inference.ViewModels
             var rect = new Int32Rect(0, 0, frame.Width, frame.Height);
             if (frame.HasUnmanagedBuffer)
             {
-                _imageSource!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
+                using (PerfProbe.Measure("display.write_pixels.unmanaged"))
+                {
+                    _imageSource!.WritePixels(rect, frame.BgrBuffer, frame.BufferSize, stride);
+                }
             }
             else
             {
-                _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
+                using (PerfProbe.Measure("display.write_pixels.managed"))
+                {
+                    _imageSource!.WritePixels(rect, frame.BgrPixels, stride, 0);
+                }
             }
         }
 
