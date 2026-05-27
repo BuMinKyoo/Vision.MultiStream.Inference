@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -228,9 +229,16 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             int chromaWidth = (width + 1) / 2;
             int chromaHeight = (height + 1) / 2;
 
-            byte[] yPlane = CopyPlane(frame->data[0], frame->linesize[0], width, height);
-            byte[] uPlane = CopyPlane(frame->data[1], frame->linesize[1], chromaWidth, chromaHeight);
-            byte[] vPlane = CopyPlane(frame->data[2], frame->linesize[2], chromaWidth, chromaHeight);
+            // LOH 할당/GC 스파이크 회피: 매 프레임 new byte[] 대신 풀에서 빌린다.
+            // RtspYuvFrame.Dispose 에서 풀로 반납된다. 빌린 배열은 요청보다 클 수 있으니
+            // 유효 영역은 width*height 로만 다룬다(Stride==width 로 타이트 패킹).
+            byte[] yPlane = ArrayPool<byte>.Shared.Rent(width * height);
+            byte[] uPlane = ArrayPool<byte>.Shared.Rent(chromaWidth * chromaHeight);
+            byte[] vPlane = ArrayPool<byte>.Shared.Rent(chromaWidth * chromaHeight);
+
+            CopyPlane(frame->data[0], frame->linesize[0], width, height, yPlane);
+            CopyPlane(frame->data[1], frame->linesize[1], chromaWidth, chromaHeight, uPlane);
+            CopyPlane(frame->data[2], frame->linesize[2], chromaWidth, chromaHeight, vPlane);
 
             return new RtspYuvFrame(
                 yPlane, uPlane, vPlane,
@@ -239,10 +247,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                 capturedAt, ptsSeconds);
         }
 
-        private static byte[] CopyPlane(byte* source, int sourceStride, int width, int height)
+        // source(unmanaged, sourceStride) → dest 앞쪽에 width 단위로 타이트하게 복사.
+        // dest 는 풀에서 빌린 (더 클 수 있는) 버퍼.
+        private static void CopyPlane(byte* source, int sourceStride, int width, int height, byte[] dest)
         {
-            byte[] plane = new byte[width * height];
-            fixed (byte* destinationBase = plane)
+            fixed (byte* destinationBase = dest)
             {
                 byte* destination = destinationBase;
                 for (int y = 0; y < height; y++)
@@ -251,7 +260,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     destination += width;
                 }
             }
-            return plane;
         }
 
         public void Join(TimeSpan timeout)

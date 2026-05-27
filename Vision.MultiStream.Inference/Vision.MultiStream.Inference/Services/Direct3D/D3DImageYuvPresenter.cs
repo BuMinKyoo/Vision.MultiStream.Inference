@@ -93,9 +93,10 @@ float4 main(PS_INPUT input) : COLOR0
             using (PerfProbe.Measure("display.d3d.render_yuv"))
             {
                 EnsureResources(frame.Width, frame.Height);
-                UploadPlane(_yTexture!, frame.YPlane, frame.YStride);
-                UploadPlane(_uTexture!, frame.UPlane, frame.UStride);
-                UploadPlane(_vTexture!, frame.VPlane, frame.VStride);
+                int chromaHeight = (frame.Height + 1) / 2;
+                UploadPlane(_yTexture!, frame.YPlane, frame.YStride, frame.Height);
+                UploadPlane(_uTexture!, frame.UPlane, frame.UStride, chromaHeight);
+                UploadPlane(_vTexture!, frame.VPlane, frame.VStride, chromaHeight);
                 DrawFrame(frame.Width, frame.Height);
 
                 _image.Lock();
@@ -150,7 +151,8 @@ float4 main(PS_INPUT input) : COLOR0
             }
         }
 
-        private static unsafe void UploadPlane(IDirect3DTexture9 texture, byte[] source, int sourceStride)
+        // source 는 풀에서 빌린 버퍼라 Length 가 실제 평면보다 클 수 있으므로 rows 를 명시로 받는다.
+        private static unsafe void UploadPlane(IDirect3DTexture9 texture, byte[] source, int sourceStride, int rows)
         {
             LockedRectangle rect = texture.LockRect(0, LockFlags.Discard);
             try
@@ -160,7 +162,6 @@ float4 main(PS_INPUT input) : COLOR0
                 {
                     byte* src = srcBase;
                     byte* dst = (byte*)rect.DataPointer;
-                    int rows = source.Length / sourceStride;
                     for (int y = 0; y < rows; y++)
                     {
                         Buffer.MemoryCopy(src, dst, rect.Pitch, copyStride);

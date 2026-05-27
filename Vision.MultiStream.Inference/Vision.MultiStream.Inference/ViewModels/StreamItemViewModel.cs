@@ -679,7 +679,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 Interlocked.Increment(ref _displayGeneration);
                 DrainPendingDisplayFrames();
                 Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
-                _latestYuvFrame = null;
+                Interlocked.Exchange(ref _latestYuvFrame, null)?.Dispose();
                 StopInferenceLoop();
                 StopAudioDiagTimer();
                 _audioOutput = null; // RtspFrameSource.Stop() 이 Dispose 까지 책임짐
@@ -779,7 +779,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
         {
-            _latestYuvFrame = frame;
+            // 아직 표시되지 않은 직전 프레임은 버려지므로 풀에 반납한다(누수 방지).
+            // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다
+            RtspYuvFrame? dropped = Interlocked.Exchange(ref _latestYuvFrame, frame);
+            dropped?.Dispose();
             if (Interlocked.CompareExchange(ref _yuvDisplayPumpScheduled, 1, 0) == 0)
             {
                 _dispatcher.BeginInvoke(DrainYuvDisplayFrame, DispatcherPriority.Render);
@@ -788,9 +791,9 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void DrainYuvDisplayFrame()
         {
+            RtspYuvFrame? frame = Interlocked.Exchange(ref _latestYuvFrame, null);
             try
             {
-                RtspYuvFrame? frame = Interlocked.Exchange(ref _latestYuvFrame, null);
                 if (frame == null)
                 {
                     return;
@@ -820,6 +823,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
             finally
             {
+                // 표시가 끝난(또는 실패한) 프레임 버퍼를 풀에 반납.
+                frame?.Dispose();
                 Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
             }
         }
