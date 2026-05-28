@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using FFmpeg.AutoGen;
+using Vision.MultiStream.Inference.Common;
 
 namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
 {
@@ -82,14 +83,25 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     AVPacket* pkt = (AVPacket*)pktPtr;
                     try
                     {
-                        if (ffmpeg.avcodec_send_packet(_codecCtx, pkt) < 0)
+                        int sendRet;
+                        // 진단: H.264 디코딩 CPU 비용 (send).
+                        using (PerfProbe.Measure("rtsp.video.send"))
+                        {
+                            sendRet = ffmpeg.avcodec_send_packet(_codecCtx, pkt);
+                        }
+                        if (sendRet < 0)
                         {
                             continue;
                         }
 
                         while (true)
                         {
-                            int ret = ffmpeg.avcodec_receive_frame(_codecCtx, _frame);
+                            int ret;
+                            // 진단: H.264 디코딩 CPU 비용 (receive). count = 초당 디코드 프레임 수.
+                            using (PerfProbe.Measure("rtsp.video.receive"))
+                            {
+                                ret = ffmpeg.avcodec_receive_frame(_codecCtx, _frame);
+                            }
                             if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
                             {
                                 break;
@@ -110,7 +122,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
 
                             try
                             {
-                                _frameQueue.Add((IntPtr)clone, ct);
+                                // 진단: avg 가 높으면 다운스트림(렌더러/UI)이 못 따라와 디코더가 막힘.
+                                using (PerfProbe.Measure("rtsp.video.enqueue"))
+                                {
+                                    _frameQueue.Add((IntPtr)clone, ct);
+                                }
                             }
                             catch (InvalidOperationException)
                             {

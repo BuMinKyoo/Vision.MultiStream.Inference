@@ -21,6 +21,7 @@
         </ObjectDataProvider>
     </Window.Resources>
 
+    <Grid>
     <DockPanel>
         <!-- 프로세스 성능 상태바 -->
         <Border DockPanel.Dock="Top" Background="#1A1A1A" Padding="12,4"
@@ -210,18 +211,26 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- 자동 타일링 그리드 -->
-                    <ItemsControl ItemsSource="{Binding Streams}">
+                    <!-- 컴포지터 출력(배경) + 셀별 오버레이(앞). 컴포지터가 전 스트림 영상을 한 번에 합성해 그림. -->
+                    <Grid>
+                        <!-- Source 는 MainWindow.Loaded 에서 컴포지터의 D3DImage 를 직접 대입(디버그 박스와 동일 패턴). -->
+                        <Image x:Name="MainCompositorImage" Stretch="Fill"/>
+
+                    <!-- 자동 타일링 그리드 (검출박스/상태/버튼 오버레이만) -->
+                    <ItemsControl ItemsSource="{Binding Streams}" Background="Transparent">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <UniformGrid Columns="{Binding GridColumns}"/>
+                                <UniformGrid Columns="{Binding GridColumns}" Rows="{Binding GridRows}"/>
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type vm:StreamItemViewModel}">
-                                <Border BorderBrush="#888" BorderThickness="1" Background="#000" Margin="2">
+                                <!-- 정상 경로: 영상은 컴포지터(배경 Image)가 그림 → 셀의 Image 는 Source=null(투명).
+                                     폴백 경로(컴포지터 실패 시): 기존 per-stream D3DImageYuvPresenter 가 ImageSource 를
+                                     채우면 셀의 Image 가 영상을 그린다. -->
+                                <Border BorderBrush="#888" BorderThickness="1" Background="Transparent" Margin="2">
                                     <Grid>
-                                        <!-- 영상 + 검출 박스 -->
+                                        <!-- 영상(폴백용) + 검출 박스 -->
                                         <Viewbox Stretch="Uniform">
                                             <Grid Width="{Binding ImageWidth}" Height="{Binding ImageHeight}">
                                                 <Image Source="{Binding ImageSource}" Stretch="Fill"/>
@@ -358,6 +367,7 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    </Grid>
                 </DockPanel>
             </Grid>
         </TabItem>
@@ -451,4 +461,5 @@
 
     </TabControl>
     </DockPanel>
+    </Grid>
 </Window>

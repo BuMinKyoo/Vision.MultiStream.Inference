@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Windows;
 using Vision.MultiStream.Inference.Common;
+using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Rtsp;
 using Vision.MultiStream.Inference.Services.Yolo;
 using Vision.MultiStream.Inference.Views;
@@ -25,6 +28,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private bool _newUseInference = true;
         private LayoutMode _layout = LayoutMode.Auto;
         private int _autoCounter = 1;
+        private StreamCompositor? _compositor;
 
         public MultiStreamViewModel(
             IRtspFrameDetector cpuDetector,
@@ -49,9 +53,96 @@ namespace Vision.MultiStream.Inference.ViewModels
             StartAllCommand = new RelayCommand(StartAll);
             StopAllCommand = new RelayCommand(StopAll);
             RemoveAllCommand = new RelayCommand(RemoveAll);
+
+            // 스트림 추가/삭제 시 레이아웃 재계산.
+            Streams.CollectionChanged += OnStreamsCollectionChanged;
+        }
+
+        private void OnStreamsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            RecomputeLayout();
         }
 
         public ObservableCollection<StreamItemViewModel> Streams { get; } = new();
+
+        // 윈도우 로드 후 MainWindow 가 컴포지터를 주입. 기존+이후 스트림에 전파.
+        public void AttachCompositor(StreamCompositor compositor)
+        {
+            _compositor = compositor;
+            foreach (var s in Streams)
+            {
+                WireStream(s);
+            }
+            RecomputeLayout();
+        }
+
+        // 스트림 추가 시 컴포지터 연결 + 슬롯 변경 이벤트 구독.
+        private void WireStream(StreamItemViewModel item)
+        {
+            item.CompositorSlotChanged += OnAnySlotChanged;
+            if (_compositor != null)
+            {
+                item.AttachCompositor(_compositor);
+            }
+        }
+
+        private void UnwireStream(StreamItemViewModel item)
+        {
+            item.CompositorSlotChanged -= OnAnySlotChanged;
+        }
+
+        private void OnAnySlotChanged()
+        {
+            RecomputeLayout();
+        }
+
+        // WPF UniformGrid 규칙(Auto = ceil(sqrt(N)), Grid2x2/3x3/4x4 = 그 열수)을 그대로 따라
+        // 컴포지터 surface 좌표계로 셀 rect 를 계산해 SetLayout 으로 전달.
+        // 슬롯이 없는(시작 안 한) 스트림은 빈 자리로 두고 그 셀은 컴포지터에서 검정으로 남는다.
+        private void RecomputeLayout()
+        {
+            if (_compositor == null)
+            {
+                return;
+            }
+            int n = Streams.Count;
+            if (n == 0)
+            {
+                _compositor.SetLayout(Array.Empty<TileRect>());
+                return;
+            }
+
+            int cols, rows;
+            if (GridColumns > 0)
+            {
+                // 고정 그리드 모드(Grid2x2/3x3/4x4): rows 도 같이 고정 → 스트림이 모자라도 같은 격자 유지.
+                cols = GridColumns;
+                rows = GridRows;
+            }
+            else
+            {
+                // Auto: WPF UniformGrid 의 실제 자동 분할 규칙과 동일하게 맞춤
+                // (cols=rows=ceil(sqrt(N)) → 정사각 격자. N=2 면 2×2 = 4셀, 위 2개만 채움).
+                cols = (int)Math.Ceiling(Math.Sqrt(n));
+                rows = cols;
+            }
+            int cellW = _compositor.Width / cols;
+            int cellH = _compositor.Height / rows;
+
+            var rects = new List<TileRect>(n);
+            for (int i = 0; i < n; i++)
+            {
+                StreamItemViewModel item = Streams[i];
+                if (item.CompositorSlotId < 0)
+                {
+                    continue;
+                }
+                int col = i % cols;
+                int row = i / cols;
+                rects.Add(new TileRect(item.CompositorSlotId, col * cellW, row * cellH, cellW, cellH));
+            }
+            _compositor.SetLayout(rects);
+        }
 
         public RelayCommand AddStreamCommand { get; }
         public RelayCommand AddBulkCommand { get; }
@@ -172,11 +263,23 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _layout = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(GridColumns));
+                OnPropertyChanged(nameof(GridRows));
+                RecomputeLayout();
             }
         }
 
         // UniformGrid.Columns 바인딩용. 0 = 자동 (UniformGrid 기본 동작).
         public int GridColumns => _layout switch
+        {
+            LayoutMode.Grid2x2 => 2,
+            LayoutMode.Grid3x3 => 3,
+            LayoutMode.Grid4x4 => 4,
+            _ => 0
+        };
+
+        // UniformGrid.Rows 바인딩용. 0 = 자동. Grid2x2/3x3/4x4 는 rows 도 고정해서
+        // 스트림 수가 모자라도 surface 가 같은 격자로 분할되도록 한다.
+        public int GridRows => _layout switch
         {
             LayoutMode.Grid2x2 => 2,
             LayoutMode.Grid3x3 => 3,
@@ -223,11 +326,14 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled)
         {
-            return new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled);
+            WireStream(item);
+            return item;
         }
 
         private void OnRemoveRequested(StreamItemViewModel item)
         {
+            UnwireStream(item);
             item.Dispose();
             Streams.Remove(item);
             OnPropertyChanged(nameof(TotalCount));
@@ -279,6 +385,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             foreach (var s in Streams)
             {
+                UnwireStream(s);
                 s.Dispose();
             }
             Streams.Clear();
@@ -287,8 +394,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         public void Dispose()
         {
+            Streams.CollectionChanged -= OnStreamsCollectionChanged;
             foreach (var s in Streams)
             {
+                UnwireStream(s);
                 s.Dispose();
             }
             Streams.Clear();

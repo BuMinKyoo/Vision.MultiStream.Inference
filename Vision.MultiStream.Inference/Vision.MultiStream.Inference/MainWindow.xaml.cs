@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Windows;
+using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Rtsp;
 using Vision.MultiStream.Inference.Services.Snapshot;
 using Vision.MultiStream.Inference.Services.Yolo;
@@ -20,9 +21,33 @@ namespace Vision.MultiStream.Inference
         private MultiStreamViewModel? _multiStreamVm;
         private PerformanceViewModel? _performanceVm;
 
+        private StreamCompositor? _compositor;
+
         public MainWindow()
         {
             InitializeComponent();
+
+            // 윈도우 로드 후(HWND 확보 후) 컴포지터 생성. D3D9 실패(GPU/드라이버 부재 등) 시
+            // 컴포지터 없이 진행 → 각 스트림은 기존 per-stream D3DImage 경로(이쪽도 실패하면
+            // 추가로 WriteableBitmap CPU 경로) 로 자동 폴백.
+            Loaded += (_, _) =>
+            {
+                try
+                {
+                    var compositor = new StreamCompositor(1280, 720);
+                    compositor.Start();
+                    _compositor = compositor;
+                    MainCompositorImage.Source = compositor.Image;
+                    _multiStreamVm?.AttachCompositor(compositor);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Compositor] 초기화 실패 — per-stream 경로로 폴백: {ex.Message}");
+                    _compositor?.Dispose();
+                    _compositor = null;
+                }
+            };
+            Closed += (_, _) => _compositor?.Dispose();
 
             string modelPath = Path.Combine(
                 AppContext.BaseDirectory, "Assets", "Models", "yolov8n.onnx");

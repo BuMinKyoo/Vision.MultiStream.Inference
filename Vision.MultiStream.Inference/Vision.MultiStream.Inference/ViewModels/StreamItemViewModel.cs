@@ -82,6 +82,16 @@ namespace Vision.MultiStream.Inference.ViewModels
         private int _displayGeneration;
         private RtspYuvFrame? _latestYuvFrame;
 
+        // [Step 4] 단일 컴포지터 표시 경로. 설정되면 YUV 프레임을 컴포지터로 보내고 per-stream 표시 경로는 쓰지 않는다.
+        private StreamCompositor? _compositor;
+        private int _compositorSlot = -1;
+
+        /// <summary>현재 슬롯 ID(없으면 -1). MultiStreamViewModel 의 레이아웃 계산에서 사용.</summary>
+        public int CompositorSlotId => _compositorSlot;
+
+        /// <summary>슬롯이 등록/해제되어 레이아웃을 다시 계산해야 할 때 발생.</summary>
+        public event Action? CompositorSlotChanged;
+
         public StreamItemViewModel(
             string name,
             string rtspUrl,
@@ -604,6 +614,13 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _displayFpsCounter.Reset();
                 _inferenceFpsCounter.Reset();
 
+                // 컴포지터가 붙어 있으면 슬롯 등록 (프레임 도착 전에) + 레이아웃 재계산 트리거.
+                if (_compositor != null)
+                {
+                    _compositorSlot = _compositor.RegisterStream();
+                    CompositorSlotChanged?.Invoke();
+                }
+
                 _source = new RtspFrameSource(RtspUrl);
                 _source.ReaderFramesEnabled = _isInferenceEnabled;
                 _source.UseYuvDisplayFrames = true;
@@ -680,6 +697,15 @@ namespace Vision.MultiStream.Inference.ViewModels
                 DrainPendingDisplayFrames();
                 Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
                 Interlocked.Exchange(ref _latestYuvFrame, null)?.Dispose();
+
+                // 컴포지터 슬롯 해제 + 레이아웃 재계산 트리거.
+                if (_compositor != null && _compositorSlot >= 0)
+                {
+                    _compositor.UnregisterStream(_compositorSlot);
+                    _compositorSlot = -1;
+                    CompositorSlotChanged?.Invoke();
+                }
+
                 StopInferenceLoop();
                 StopAudioDiagTimer();
                 _audioOutput = null; // RtspFrameSource.Stop() 이 Dispose 까지 책임짐
@@ -777,8 +803,24 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        // [Step 4] 컴포지터를 표시 경로로 사용. 비디오 시작 전에 호출.
+        public void AttachCompositor(StreamCompositor compositor)
+        {
+            _compositor = compositor;
+        }
+
         private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
         {
+            // 컴포지터 경로: 프레임을 컴포지터에 넘기고(소유권 이전) per-stream 표시 경로는 건너뛴다.
+            // DrainYuvDisplayFrame 을 안 거치므로 FPS tick 은 여기서 처리.
+            if (_compositor != null)
+            {
+                _displayFpsCounter.Tick(out double fps);
+                DisplayFps = fps;
+                _compositor.SubmitFrame(_compositorSlot, frame);
+                return;
+            }
+
             // 아직 표시되지 않은 직전 프레임은 버려지므로 풀에 반납한다(누수 방지).
             // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다
             RtspYuvFrame? dropped = Interlocked.Exchange(ref _latestYuvFrame, frame);
