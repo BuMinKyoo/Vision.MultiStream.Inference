@@ -188,6 +188,15 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                 ffmpeg.sws_scale(_swsCtx, frame->data, frame->linesize, 0, h, dstData, dstLinesize);
             }
 
+            // 추론용 managed 복사는 이벤트 raise 보다 먼저 한다.
+            // raise 안에서 핸들러가 동기로 displayBuffer 를 해제할 수 있어 use-after-free 위험이 있음.
+            byte[]? managedForInference = null;
+            if (_settings.ReaderFramesEnabled)
+            {
+                managedForInference = new byte[_dstBufSize];
+                Marshal.Copy(displayBuffer, managedForInference, 0, _dstBufSize);
+            }
+
             var displayFrame = new RtspFrame(displayBuffer, _dstBufSize, w, h, capturedAt, ptsSeconds);
             bool handedOff = false;
             try
@@ -197,11 +206,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     handedOff = _raiseFrameCaptured(displayFrame);
                 }
 
-                if (_settings.ReaderFramesEnabled)
+                if (managedForInference != null)
                 {
-                    byte[] managed = new byte[_dstBufSize];
-                    Marshal.Copy(displayBuffer, managed, 0, _dstBufSize);
-                    _inferenceWriter.TryWrite(new RtspFrame(managed, w, h, capturedAt, ptsSeconds));
+                    _inferenceWriter.TryWrite(new RtspFrame(managedForInference, w, h, capturedAt, ptsSeconds));
                 }
             }
             finally

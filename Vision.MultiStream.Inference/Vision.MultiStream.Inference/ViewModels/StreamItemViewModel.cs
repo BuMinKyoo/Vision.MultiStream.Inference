@@ -790,7 +790,10 @@ namespace Vision.MultiStream.Inference.ViewModels
 
         private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
         {
-            if (_d3dPresenter != null)
+            // 컴포지터(YUV) 가 표시를 맡고 있으면 BGR 프레임은 표시용으로 안 쓰고 폐기.
+            // (per-stream D3DImageYuvPresenter 폴백도 마찬가지.) BGR 은 추론 경로 전용이라
+            // 추론 데이터는 VideoRenderer 에서 별도 채널로 따로 보낸다.
+            if (_compositor != null || _d3dPresenter != null)
             {
                 frame.Dispose();
                 return;
@@ -812,11 +815,22 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
         {
             // 컴포지터 경로: 프레임을 컴포지터에 넘기고(소유권 이전) per-stream 표시 경로는 건너뛴다.
-            // DrainYuvDisplayFrame 을 안 거치므로 FPS tick 은 여기서 처리.
+            // DrainYuvDisplayFrame 을 안 거치므로 FPS tick + ImageWidth/Height 갱신은 여기서.
+            // ImageWidth/Height 는 검출박스 오버레이 Grid 의 좌표계(원본 해상도) 라서 0 이면 박스가 안 보임.
             if (_compositor != null)
             {
                 _displayFpsCounter.Tick(out double fps);
                 DisplayFps = fps;
+                if (_imageWidth != frame.Width || _imageHeight != frame.Height)
+                {
+                    int w = frame.Width;
+                    int h = frame.Height;
+                    _dispatcher.BeginInvoke(() =>
+                    {
+                        ImageWidth = w;
+                        ImageHeight = h;
+                    });
+                }
                 _compositor.SubmitFrame(_compositorSlot, frame);
                 return;
             }

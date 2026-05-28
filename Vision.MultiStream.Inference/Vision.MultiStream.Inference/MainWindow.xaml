@@ -230,8 +230,9 @@
                                      채우면 셀의 Image 가 영상을 그린다. -->
                                 <Border BorderBrush="#888" BorderThickness="1" Background="Transparent" Margin="2">
                                     <Grid>
-                                        <!-- 영상(폴백용) + 검출 박스 -->
-                                        <Viewbox Stretch="Uniform">
+                                        <!-- 영상(폴백용) + 검출 박스. 컴포지터(Stretch=Fill)와 fit 을 맞추려고
+                                             Viewbox 도 Fill 사용 → 셀 종횡비가 원본과 달라도 박스가 비디오 픽셀에 정확히 따라붙음. -->
+                                        <Viewbox Stretch="Fill">
                                             <Grid Width="{Binding ImageWidth}" Height="{Binding ImageHeight}">
                                                 <Image Source="{Binding ImageSource}" Stretch="Fill"/>
                                                 <ItemsControl ItemsSource="{Binding Detections}">
