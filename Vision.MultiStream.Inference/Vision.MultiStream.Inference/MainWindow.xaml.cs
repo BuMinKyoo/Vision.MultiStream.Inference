@@ -34,7 +34,9 @@ namespace Vision.MultiStream.Inference
             {
                 try
                 {
-                    var compositor = new StreamCompositor(1280, 720);
+                    // surface 가 크면 셀별 다운스케일 비율이 줄어 YUV 샘플링 아티팩트(색감 시프트/깍두기) 감소.
+                    // 단일 스트림(전체 surface 1타일) 이면 1:1 → 기존 per-stream presenter 화질과 동일.
+                    var compositor = new StreamCompositor(2560, 1440);
                     compositor.Start();
                     _compositor = compositor;
                     MainCompositorImage.Source = compositor.Image;
