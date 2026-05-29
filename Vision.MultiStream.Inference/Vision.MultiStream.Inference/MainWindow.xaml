@@ -95,6 +95,15 @@
                                     <RadioButton Content="DML" IsChecked="{Binding NewUseDirectML}" GroupName="NewDevice" Margin="8,0,0,0"/>
                                     <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,0"/>
                                 </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <TextBlock Text="디코더:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="SW" IsChecked="{Binding NewUseSoftwareDecoding}" GroupName="NewDecoder"
+                                                 VerticalAlignment="Center"
+                                                 ToolTip="소프트웨어(CPU) 디코딩"/>
+                                    <RadioButton Content="HW" IsChecked="{Binding NewUseHardwareDecoding}" GroupName="NewDecoder" Margin="8,0,0,0"
+                                                 VerticalAlignment="Center"
+                                                 ToolTip="하드웨어(D3D11VA) 디코딩 — 실패 시 폴백 없이 에러"/>
+                                </StackPanel>
                                 <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="0,6,0,0"
                                           ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
@@ -155,10 +164,15 @@
                                             </Grid.RowDefinitions>
                                             <TextBlock Grid.Row="0" Grid.Column="0" FontWeight="Bold"
                                                        Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
-                                            <Border Grid.Row="0" Grid.Column="1" Background="#333"
-                                                    Padding="4,1" Margin="6,0,0,0" CornerRadius="2">
-                                                <TextBlock Text="{Binding DeviceLabel}" Foreground="White" FontSize="10"/>
-                                            </Border>
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0">
+                                                <Border Background="#333" Padding="4,1" CornerRadius="2">
+                                                    <TextBlock Text="{Binding DeviceLabel}" Foreground="White" FontSize="10"/>
+                                                </Border>
+                                                <Border Background="#1E5BAA" Padding="4,1" Margin="4,0,0,0" CornerRadius="2"
+                                                        ToolTip="디코더 (SW/HW)">
+                                                    <TextBlock Text="{Binding DecoderLabel}" Foreground="White" FontSize="10"/>
+                                                </Border>
+                                            </StackPanel>
                                             <Ellipse Grid.Row="0" Grid.Column="2" Width="8" Height="8"
                                                      Margin="6,0,0,0" VerticalAlignment="Center"
                                                      Fill="LimeGreen"
@@ -306,6 +320,9 @@
                                                            DockPanel.Dock="Left" VerticalAlignment="Center"/>
                                                 <TextBlock Text="{Binding DeviceLabel}" Foreground="LightGray"
                                                            DockPanel.Dock="Left" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding DecoderLabel}" Foreground="#88CCFF" FontSize="11"
+                                                           DockPanel.Dock="Left" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                           ToolTip="디코더 (SW/HW)"/>
                                                 <TextBlock Text="{Binding StatusMessage}" Foreground="#AAA" FontSize="11"
                                                            DockPanel.Dock="Left" Margin="8,0,0,0" VerticalAlignment="Center"
                                                            TextTrimming="CharacterEllipsis"/>

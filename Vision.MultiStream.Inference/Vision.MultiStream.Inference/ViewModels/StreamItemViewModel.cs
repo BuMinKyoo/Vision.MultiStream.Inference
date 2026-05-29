@@ -49,6 +49,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _name;
         private string _rtspUrl;
         private InferenceDevice _device;
+        private readonly bool _useHardwareDecoding;
         private bool _isVideoEnabled;
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
@@ -98,11 +99,13 @@ namespace Vision.MultiStream.Inference.ViewModels
             InferenceDevice device,
             Func<InferenceDevice, IRtspFrameDetector> detectorResolver,
             Action<StreamItemViewModel> onRemoveRequested,
-            bool initialInferenceEnabled = true)
+            bool initialInferenceEnabled = true,
+            bool useHardwareDecoding = false)
         {
             _name = name;
             _rtspUrl = rtspUrl;
             _device = device;
+            _useHardwareDecoding = useHardwareDecoding;
             _isInferenceEnabled = initialInferenceEnabled;
             _detectorResolver = detectorResolver;
             _onRemoveRequested = onRemoveRequested;
@@ -181,6 +184,10 @@ namespace Vision.MultiStream.Inference.ViewModels
             InferenceDevice.Gpu => "CUDA",
             _ => "CPU"
         };
+
+        // 디코더 종류 표시용 배지. 생성 후 변경 불가(읽기 전용).
+        public bool UseHardwareDecoding => _useHardwareDecoding;
+        public string DecoderLabel => _useHardwareDecoding ? "D3D11VA" : "SW";
 
         public bool UseCpu
         {
@@ -635,7 +642,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                     IsMuted = !_isAudioEnabled
                 };
                 _audioOutput = audioOutput;
-                _source.Start(audioOutput);
+                _source.Start(audioOutput, _useHardwareDecoding);
 
                 if (_isInferenceEnabled)
                 {

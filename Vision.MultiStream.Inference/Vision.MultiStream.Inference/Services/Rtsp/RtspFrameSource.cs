@@ -35,6 +35,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private CancellationTokenSource? _cts;
         private Thread? _startupThread;
         private volatile bool _isRunning;
+        private bool _useHardwareDecoding;
 
         private IAudioOutput? _audioOutput;
 
@@ -82,8 +83,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         /// <summary>
         /// 연결·디코딩 시작. avformat_open_input 이 블로킹이므로 조립은 백그라운드 스레드에서 한다.
         /// audioOutput 가 null 이 아니고 스트림에 오디오가 있으면 오디오도 활성화한다.
+        /// useHardwareDecoding=true 이면 비디오 디코더가 D3D11VA 경로로 열린다(실패 시 폴백 없이 에러).
         /// </summary>
-        public void Start(IAudioOutput? audioOutput)
+        public void Start(IAudioOutput? audioOutput, bool useHardwareDecoding = false)
         {
             lock (_lifecycle)
             {
@@ -95,6 +97,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 FFmpegLibraryLoader.EnsureRegistered();
 
                 _audioOutput = audioOutput;
+                _useHardwareDecoding = useHardwareDecoding;
                 _clock.Reset();
                 _cts = new CancellationTokenSource();
                 _isRunning = true;
@@ -146,7 +149,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 var videoFrameQueue = new BlockingCollection<IntPtr>(
                     new ConcurrentQueue<IntPtr>(), VideoFrameQueueCapacity);
 
-                videoDecoder = new VideoDecoder(info.VideoCodecParams, videoPacketQueue, videoFrameQueue, RaiseStatus);
+                videoDecoder = new VideoDecoder(info.VideoCodecParams, videoPacketQueue, videoFrameQueue, RaiseStatus, _useHardwareDecoding);
                 if (!videoDecoder.Open())
                 {
                     RaiseStatus("비디오 코덱 열기 실패");

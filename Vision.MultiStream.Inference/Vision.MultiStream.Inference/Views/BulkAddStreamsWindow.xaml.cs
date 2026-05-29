@@ -14,6 +14,7 @@ namespace Vision.MultiStream.Inference.Views
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
         public bool SelectedInferenceEnabled { get; private set; } = true;
+        public bool SelectedUseHardwareDecoding { get; private set; }
 
         private string[] _urls = Array.Empty<string>();
 
@@ -38,6 +39,7 @@ namespace Vision.MultiStream.Inference.Views
             }
 
             SelectedInferenceEnabled = InferenceCheck.IsChecked == true;
+            SelectedUseHardwareDecoding = HwDecoderRadio.IsChecked == true;
 
             DialogResult = true;
             Close();

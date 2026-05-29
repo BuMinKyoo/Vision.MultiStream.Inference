@@ -17,6 +17,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private readonly BlockingCollection<IntPtr> _packetQueue;
         private readonly BlockingCollection<IntPtr> _frameQueue;
         private readonly Action<string> _onStatus;
+        private readonly bool _useHardwareDecoding;
 
         private AVCodecContext* _codecCtx;
         private AVFrame* _frame;
@@ -26,17 +27,27 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             IntPtr codecParams,
             BlockingCollection<IntPtr> packetQueue,
             BlockingCollection<IntPtr> frameQueue,
-            Action<string> onStatus)
+            Action<string> onStatus,
+            bool useHardwareDecoding = false)
         {
             _codecParams = codecParams;
             _packetQueue = packetQueue;
             _frameQueue = frameQueue;
             _onStatus = onStatus;
+            _useHardwareDecoding = useHardwareDecoding;
         }
 
         /// <summary>코덱 컨텍스트를 연다. 실패 시 false.</summary>
         public bool Open()
         {
+            // Stage 1: HW 디코딩은 UI/배선만 들어왔고 실제 D3D11VA 경로는 Stage 2 에서 구현.
+            // 폴백 없이 명시적 실패 처리한다(사용자가 라디오를 SW 로 바꿔야 함).
+            if (_useHardwareDecoding)
+            {
+                _onStatus("하드웨어 디코딩 미구현 (Stage 2 필요) — 라디오를 '소프트웨어' 로 변경하세요");
+                return false;
+            }
+
             AVCodecParameters* codecpar = (AVCodecParameters*)_codecParams;
             AVCodec* codec = ffmpeg.avcodec_find_decoder(codecpar->codec_id);
             if (codec == null)

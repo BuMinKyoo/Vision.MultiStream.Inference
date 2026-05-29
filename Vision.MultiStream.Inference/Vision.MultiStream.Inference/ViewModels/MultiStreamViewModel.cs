@@ -26,6 +26,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _newRtspUrl = "rtsp://localhost:8554/cam1";
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
         private bool _newUseInference = true;
+        private bool _newUseHardwareDecoding;
         private LayoutMode _layout = LayoutMode.Auto;
         private int _autoCounter = 1;
         private StreamCompositor? _compositor;
@@ -251,6 +252,36 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        // 디코더 선택 라디오. 기본값은 SW. HW 는 D3D11VA 분기로 가지만 현재 Stage 1 에서는
+        // VideoDecoder.Open() 이 "HW 미구현" 으로 실패 처리한다 (Stage 2 에서 실제 구현).
+        public bool NewUseSoftwareDecoding
+        {
+            get => !_newUseHardwareDecoding;
+            set
+            {
+                if (value && _newUseHardwareDecoding)
+                {
+                    _newUseHardwareDecoding = false;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(NewUseHardwareDecoding));
+                }
+            }
+        }
+
+        public bool NewUseHardwareDecoding
+        {
+            get => _newUseHardwareDecoding;
+            set
+            {
+                if (value && !_newUseHardwareDecoding)
+                {
+                    _newUseHardwareDecoding = true;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(NewUseSoftwareDecoding));
+                }
+            }
+        }
+
         public LayoutMode Layout
         {
             get => _layout;
@@ -292,7 +323,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newUseHardwareDecoding);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -312,6 +343,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             InferenceDevice device = dialog.SelectedDevice;
             bool inferenceEnabled = dialog.SelectedInferenceEnabled;
+            bool useHardwareDecoding = dialog.SelectedUseHardwareDecoding;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -319,14 +351,14 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, useHardwareDecoding));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled)
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, bool useHardwareDecoding)
         {
-            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, useHardwareDecoding);
             WireStream(item);
             return item;
         }

@@ -25,17 +25,28 @@
                  FontFamily="Consolas"
                  FontSize="12"/>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-            <TextBlock Text="추론 디바이스:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-            <RadioButton x:Name="CpuRadio" Content="CPU" GroupName="Device" IsChecked="True"
-                         VerticalAlignment="Center"/>
-            <RadioButton x:Name="DmlRadio" Content="DirectML" GroupName="Device" Margin="8,0,0,0"
-                         VerticalAlignment="Center"/>
-            <RadioButton x:Name="GpuRadio" Content="CUDA" GroupName="Device" Margin="8,0,0,0"
-                         VerticalAlignment="Center"/>
-            <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
-                      Margin="16,0,0,0" VerticalAlignment="Center"
-                      ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
+        <StackPanel Grid.Row="2" Orientation="Vertical" Margin="0,8,0,0">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="추론 디바이스:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <RadioButton x:Name="CpuRadio" Content="CPU" GroupName="Device" IsChecked="True"
+                             VerticalAlignment="Center"/>
+                <RadioButton x:Name="DmlRadio" Content="DirectML" GroupName="Device" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                <RadioButton x:Name="GpuRadio" Content="CUDA" GroupName="Device" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
+                          Margin="16,0,0,0" VerticalAlignment="Center"
+                          ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <TextBlock Text="디코더:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <RadioButton x:Name="SwDecoderRadio" Content="SW" GroupName="Decoder" IsChecked="True"
+                             VerticalAlignment="Center"
+                             ToolTip="소프트웨어(CPU) 디코딩"/>
+                <RadioButton x:Name="HwDecoderRadio" Content="HW" GroupName="Decoder" Margin="8,0,0,0"
+                             VerticalAlignment="Center"
+                             ToolTip="하드웨어(D3D11VA) 디코딩 — 실패 시 폴백 없이 에러"/>
+            </StackPanel>
         </StackPanel>
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
