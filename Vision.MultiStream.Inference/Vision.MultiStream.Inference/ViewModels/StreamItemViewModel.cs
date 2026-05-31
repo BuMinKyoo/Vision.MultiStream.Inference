@@ -634,6 +634,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
                 _source.YuvFrameCaptured += OnYuvFrameCapturedForDisplay;
+                _source.D3D11FrameCaptured += OnD3D11FrameCapturedForDisplay;
 
                 // 오디오 출력은 항상 생성. 토글 OFF 상태면 muted 로 시작.
                 // 디코더는 스트림에 오디오 트랙이 있으면 가동, 없으면 자동으로 안 띄움.
@@ -721,6 +722,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     _source.FrameCaptured -= OnFrameCapturedForDisplay;
                     _source.YuvFrameCaptured -= OnYuvFrameCapturedForDisplay;
+                    _source.D3D11FrameCaptured -= OnD3D11FrameCapturedForDisplay;
                     _source.StatusChanged -= OnSourceStatusChanged;
                     _source.Stop();
                     _source.Dispose();
@@ -819,6 +821,31 @@ namespace Vision.MultiStream.Inference.ViewModels
             _compositor = compositor;
         }
 
+        // HW(D3D11) 표시 프레임. GPU 텍스처라 per-stream 폴백 표시 경로가 없다 →
+        // 컴포지터가 없으면 GPU ref 누수를 막기 위해 즉시 Dispose.
+        private void OnD3D11FrameCapturedForDisplay(object? sender, RtspD3D11Frame frame)
+        {
+            if (_compositor == null)
+            {
+                frame.Dispose();
+                return;
+            }
+
+            _displayFpsCounter.Tick(out double fps);
+            DisplayFps = fps;
+            if (_imageWidth != frame.Width || _imageHeight != frame.Height)
+            {
+                int w = frame.Width;
+                int h = frame.Height;
+                _dispatcher.BeginInvoke(() =>
+                {
+                    ImageWidth = w;
+                    ImageHeight = h;
+                });
+            }
+            _compositor.SubmitD3D11Frame(_compositorSlot, frame);
+        }
+
         private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
         {
             // 컴포지터 경로: 프레임을 컴포지터에 넘기고(소유권 이전) per-stream 표시 경로는 건너뛴다.
@@ -842,6 +869,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 return;
             }
 
+            // 컴포지터가 생성되지 않으면(gpu가 없으면) 여기로직으로 빠짐
             // 아직 표시되지 않은 직전 프레임은 버려지므로 풀에 반납한다(누수 방지).
             // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다
             RtspYuvFrame? dropped = Interlocked.Exchange(ref _latestYuvFrame, frame);

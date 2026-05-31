@@ -79,6 +79,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<RtspFrame>? FrameCaptured;
         public event EventHandler<RtspYuvFrame>? YuvFrameCaptured;
+        public event EventHandler<RtspD3D11Frame>? D3D11FrameCaptured;
 
         /// <summary>
         /// 연결·디코딩 시작. avformat_open_input 이 블로킹이므로 조립은 백그라운드 스레드에서 한다.
@@ -161,7 +162,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                 videoRenderer = new VideoRenderer(
                     videoFrameQueue, info.VideoTimeBase, _clock, _settings,
-                    _channel.Writer, RaiseFrameCaptured, RaiseYuvCaptured, RaiseStatus);
+                    _channel.Writer, RaiseFrameCaptured, RaiseYuvCaptured, RaiseD3D11Captured, RaiseStatus);
 
                 BlockingCollection<IntPtr>? audioPacketQueue = null;
                 BlockingCollection<AudioFrame>? audioFrameQueue = null;
@@ -313,6 +314,18 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private void RaiseYuvCaptured(RtspYuvFrame frame)
         {
             YuvFrameCaptured?.Invoke(this, frame);
+        }
+
+        // HW(D3D11) 표시 프레임. 구독자(VM→컴포지터)가 없으면 GPU ref 가 새지 않도록 즉시 Dispose.
+        private void RaiseD3D11Captured(RtspD3D11Frame frame)
+        {
+            EventHandler<RtspD3D11Frame>? handler = D3D11FrameCaptured;
+            if (handler == null)
+            {
+                frame.Dispose();
+                return;
+            }
+            handler.Invoke(this, frame);
         }
 
         private void RaiseStatus(string message)

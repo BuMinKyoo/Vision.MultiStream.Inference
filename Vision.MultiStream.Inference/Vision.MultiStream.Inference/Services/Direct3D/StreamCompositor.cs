@@ -1,16 +1,27 @@
 using System;
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using SharpGen.Runtime;
-using Vision.MultiStream.Inference.Services.Rtsp;
 using Vortice.D3DCompiler;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
 using Vortice.Direct3D9;
+using Vortice.DXGI;
+using Vortice.Mathematics;
+using Vision.MultiStream.Inference.Services.Rtsp;
+using Vision.MultiStream.Inference.Services.Rtsp.Pipeline;
+using D3D11Device = Vortice.Direct3D11.ID3D11Device;
+using D3D11Context = Vortice.Direct3D11.ID3D11DeviceContext;
+using D3D11Texture = Vortice.Direct3D11.ID3D11Texture2D;
+using D9Format = Vortice.Direct3D9.Format;
+using DxgiFormat = Vortice.DXGI.Format;
+using Viewport = Vortice.Mathematics.Viewport;
+using D9PresentParameters = Vortice.Direct3D9.PresentParameters;
+using D9SwapEffect = Vortice.Direct3D9.SwapEffect;
 
 namespace Vision.MultiStream.Inference.Services.Direct3D
 {
@@ -18,78 +29,125 @@ namespace Vision.MultiStream.Inference.Services.Direct3D
     public readonly record struct TileRect(int SlotId, int X, int Y, int Width, int Height);
 
     /// <summary>
-    /// [Step 3] 여러 스트림의 YUV 프레임을 한 D3D9Ex 디바이스로 합성해 단일 D3DImage 로 표시.
+    /// [Step 3 / GPU 직결] 여러 스트림의 프레임을 하나의 D3D11 디바이스로 합성해 단일 D3DImage 로 표시.
     ///
-    ///   - 스트림마다 RegisterStream → slotId. VideoRenderer 가 SubmitFrame(slotId, yuvFrame) 로 최신 프레임 제출.
-    ///   - 전용 렌더 스레드가: 슬롯별 YUV 텍스처 업로드 → 타일 위치에 YUV→RGB 셰이더로 드로우 →
-    ///     더블버퍼 RT 교체 → UI 에서 프레임당 1회만 D3DImage present.
-    ///   - 모든 D3D 리소스(텍스처/서피스) 생성·업로드·드로우는 렌더 스레드 단독 → 디바이스 멀티스레드 경쟁 없음.
-    ///
-    /// 현재(Step 3): 타일 배치는 임시 auto-grid(정사각 분할). 실제 레이아웃 동기화(SetLayout)는 이후 단계.
+    ///   - 디바이스는 <see cref="HwDeviceContext"/> 가 소유(디코더와 동일) → HW 디코드 NV12 텍스처를
+    ///     CPU 다운로드 없이 GPU 안에서 슬롯 텍스처로 복사해 바로 샘플링한다.
+    ///   - SW 스트림은 기존처럼 CPU YUV420P 평면을 슬롯 텍스처로 업로드한다.
+    ///   - 렌더 스레드가: 슬롯별 텍스처 준비 → 타일 위치에 YUV→RGB 셰이더로 드로우 →
+    ///     공유 RT 에 합성 → UI 에서 프레임당 1회 D3DImage present.
+    ///   - immediate context 는 디코드 스레드와 공유하므로 사용 전후로 HwDeviceContext.Lock/Unlock.
     /// </summary>
-    public sealed class StreamCompositor : IDisposable
+    public sealed unsafe class StreamCompositor : IDisposable
     {
-        private const string PixelShaderSource = @"
-sampler ySampler : register(s0);
-sampler uSampler : register(s1);
-sampler vSampler : register(s2);
-
-struct PS_INPUT
+        // 공유 정점 셰이더: SV_VertexID 로 풀스크린 삼각형 생성(정점 버퍼 불필요). 뷰포트가 타일을 결정.
+        private const string VertexShaderSource = @"
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+VSOut main(uint id : SV_VertexID)
 {
-    float2 yuv0 : TEXCOORD0;
-    float2 yuv1 : TEXCOORD1;
-    float2 yuv2 : TEXCOORD2;
-};
+    VSOut o;
+    o.uv  = float2((id << 1) & 2, id & 2);
+    o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return o;
+}";
 
-float4 main(PS_INPUT input) : COLOR0
+        // uvScale: 디코드 텍스처의 coded 크기 중 실제 표시 영역 비율(padding 행 제외). SW 는 (1,1).
+        private const string PixelShaderHeader = @"
+cbuffer Params : register(b0) { float2 uvScale; float2 pad; };
+SamplerState samp : register(s0);
+float3 YuvToRgb(float y, float u, float v)
 {
-    float y = tex2D(ySampler, input.yuv0).r;
-    float u = tex2D(uSampler, input.yuv1).r - 0.5;
-    float v = tex2D(vSampler, input.yuv2).r - 0.5;
+    u -= 0.5; v -= 0.5;
     float3 rgb;
     rgb.r = y + 1.402 * v;
     rgb.g = y - 0.344136 * u - 0.714136 * v;
     rgb.b = y + 1.772 * u;
-    return float4(saturate(rgb), 1.0);
+    return saturate(rgb);
 }";
 
-        // 한 스트림의 표시 상태. 텍스처 생성/업로드/해제는 모두 렌더 스레드에서만 한다.
+        // HW: NV12 = Y(R8) + 인터리브 UV(R8G8)
+        private const string PixelShaderNv12 = PixelShaderHeader + @"
+Texture2D<float>  texY  : register(t0);
+Texture2D<float2> texUV : register(t1);
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float2 c = uv * uvScale;
+    float  y  = texY.Sample(samp, c);
+    float2 uvv = texUV.Sample(samp, c);
+    return float4(YuvToRgb(y, uvv.x, uvv.y), 1.0);
+}";
+
+        // SW: YUV420P = Y,U,V 각각 R8
+        private const string PixelShaderYuv420 = PixelShaderHeader + @"
+Texture2D<float> texY : register(t0);
+Texture2D<float> texU : register(t1);
+Texture2D<float> texV : register(t2);
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float2 c = uv * uvScale;
+    float y = texY.Sample(samp, c);
+    float u = texU.Sample(samp, c);
+    float v = texV.Sample(samp, c);
+    return float4(YuvToRgb(y, u, v), 1.0);
+}";
+
+        // 한 스트림의 표시 상태. 모든 텍스처 생성/복사/업로드/해제는 렌더 스레드에서만.
         private sealed class Slot
         {
-            public RtspYuvFrame? Latest;        // 생산자(SubmitFrame)와 소비자(렌더 스레드)가 atomic 교체
+            // 생산자(SubmitFrame/SubmitD3D11Frame)와 소비자(렌더 스레드)가 atomic 교체.
+            public RtspYuvFrame? LatestYuv;
+            public RtspD3D11Frame? LatestD3D11;
             public volatile bool RemoveRequested;
 
-            public IDirect3DTexture9? YTex;
-            public IDirect3DTexture9? UTex;
-            public IDirect3DTexture9? VTex;
-            public int TexWidth;
-            public int TexHeight;
+            // 슬롯 소유 텍스처 + SRV.
+            // HW: NV12 단일 텍스처(코드 크기). SW: Y/U/V 3개.
+            public D3D11Texture? Nv12Tex;
+            public D3D11Texture? YTex;
+            public D3D11Texture? UTex;
+            public D3D11Texture? VTex;
+            public ID3D11ShaderResourceView? Srv0; // HW:Y  SW:Y
+            public ID3D11ShaderResourceView? Srv1; // HW:UV SW:U
+            public ID3D11ShaderResourceView? Srv2; // SW:V
+            public bool IsHardware;
+            public int TexW;
+            public int TexH;
+            public float UScale = 1f;
+            public float VScale = 1f;
 
-            public bool HasTextures => YTex != null;
+            public bool HasContent => Srv0 != null;
         }
 
         private readonly Dispatcher _dispatcher;
         private readonly D3DImage _image;
         private readonly int _width;
         private readonly int _height;
-        private readonly IntPtr _windowHandle;
 
         private readonly ConcurrentDictionary<int, Slot> _slots = new();
         private int _nextSlotId;
 
-        private IDirect3D9Ex? _d3d;
-        private IDirect3DDevice9Ex? _device;
-        private IDirect3DPixelShader9? _pixelShader;
-        // 렌더 스레드 전용 오프스크린 RT (그리는 대상).
-        private IDirect3DSurface9? _offscreenRT;
-        // D3DImage 가 읽는 backbuffer. 첫 present 시 SetBackBuffer 1회, 이후 안 바꿈.
-        // 매 프레임 UI Lock 안에서 StretchRect 로 오프스크린의 내용을 복사한다.
-        private IDirect3DSurface9? _backbufferSurface;
-        private bool _backbufferAttached;
-        // UI 가 SetLayout 으로 알려주는 슬롯별 타일 rect. 렌더 스레드는 매 프레임 이 참조를 읽어 사용.
-        // 참조 자체는 atomic 으로 교체된다(읽는 쪽은 그대로 들고 한 프레임 처리).
-        private volatile TileRect[]? _layout;
+        // 공유 D3D11 디바이스(HwDeviceContext 소유) — 빌려 쓴다.
+        private D3D11Device _device = null!;
+        private D3D11Context _context = null!;
 
+        private ID3D11VertexShader? _vs;
+        private ID3D11PixelShader? _psNv12;
+        private ID3D11PixelShader? _psYuv420;
+        private ID3D11SamplerState? _sampler;
+        private ID3D11Buffer? _paramsCb;
+
+        // 더블버퍼: 렌더 스레드는 _offscreenTex(WPF 가 보지 않음) 에 그리고,
+        // UI 스레드가 _image.Lock 안에서만 _sharedTex(= D3D9 백버퍼) 로 복사한다.
+        // → 백버퍼는 Lock 안에서만 바뀌므로 WPF 가 그리다 만 프레임을 읽어 깜박이지 않는다.
+        private D3D11Texture? _offscreenTex;
+        private ID3D11RenderTargetView? _offscreenRtv;
+        private D3D11Texture? _sharedTex;
+        private IDirect3D9Ex? _d3d9;
+        private IDirect3DDevice9Ex? _d3d9Device;
+        private IDirect3DTexture9? _d3d9Tex;
+        private IDirect3DSurface9? _d3d9Surface;
+        private bool _backbufferAttached;
+
+        private volatile TileRect[]? _layout;
         private Thread? _renderThread;
         private volatile bool _running;
 
@@ -99,7 +157,6 @@ float4 main(PS_INPUT input) : COLOR0
             _image = new D3DImage();
             _width = width;
             _height = height;
-            _windowHandle = GetMainWindowHandle();
         }
 
         public ImageSource Image => _image;
@@ -119,11 +176,10 @@ float4 main(PS_INPUT input) : COLOR0
         {
             if (_slots.TryGetValue(slotId, out Slot? slot))
             {
-                slot.RemoveRequested = true; // 실제 텍스처 해제는 렌더 스레드가 처리
+                slot.RemoveRequested = true; // 실제 해제는 렌더 스레드가 처리
             }
         }
 
-        /// <summary>UI 가 호출. 슬롯별 타일 위치를 알려준다(컴포지터 surface 좌표). 가벼운 atomic 참조 교체.</summary>
         public void SetLayout(IReadOnlyList<TileRect> layout)
         {
             var arr = new TileRect[layout.Count];
@@ -134,7 +190,7 @@ float4 main(PS_INPUT input) : COLOR0
             _layout = arr;
         }
 
-        /// <summary>VideoRenderer 가 호출. 최신 프레임으로 교체하고 직전 프레임은 풀에 반납.</summary>
+        /// <summary>SW 스트림: 최신 YUV420P 프레임으로 교체하고 직전 프레임은 풀에 반납.</summary>
         public void SubmitFrame(int slotId, RtspYuvFrame frame)
         {
             if (!_running || !_slots.TryGetValue(slotId, out Slot? slot) || slot.RemoveRequested)
@@ -142,15 +198,27 @@ float4 main(PS_INPUT input) : COLOR0
                 frame.Dispose();
                 return;
             }
-            RtspYuvFrame? dropped = Interlocked.Exchange(ref slot.Latest, frame);
+            RtspYuvFrame? dropped = Interlocked.Exchange(ref slot.LatestYuv, frame);
+            dropped?.Dispose();
+        }
+
+        /// <summary>HW 스트림: 최신 D3D11 GPU 프레임으로 교체하고 직전 프레임은 ref 반납(풀로).</summary>
+        public void SubmitD3D11Frame(int slotId, RtspD3D11Frame frame)
+        {
+            if (!_running || !_slots.TryGetValue(slotId, out Slot? slot) || slot.RemoveRequested)
+            {
+                frame.Dispose();
+                return;
+            }
+            RtspD3D11Frame? dropped = Interlocked.Exchange(ref slot.LatestD3D11, frame);
             dropped?.Dispose();
         }
 
         // ===== 수명 =====
 
         /// <summary>
-        /// 디바이스를 동기로 초기화한 뒤 렌더 스레드 시작. 디바이스 생성 실패(예: GPU/D3D9 없음)면 throw 한다.
-        /// 호출자(MainWindow)가 catch 하여 컴포지터 없이 per-stream 폴백 경로로 가야 한다.
+        /// 디바이스/리소스를 동기 초기화한 뒤 렌더 스레드 시작. D3D11 디바이스 생성 실패 등으로
+        /// 초기화 못 하면 throw → 호출자(MainWindow)가 컴포지터 없이 폴백 경로로 가야 한다.
         /// </summary>
         public void Start()
         {
@@ -161,7 +229,7 @@ float4 main(PS_INPUT input) : COLOR0
 
             try
             {
-                InitializeDevice();
+                InitializeResources();
             }
             catch
             {
@@ -193,21 +261,16 @@ float4 main(PS_INPUT input) : COLOR0
         {
             try
             {
-                // 디바이스/리소스는 Start() 에서 동기 초기화됨. 여기선 루프만.
                 while (_running)
                 {
                     long start = System.Diagnostics.Stopwatch.GetTimestamp();
 
-                    // 오프스크린 RT 에 전 슬롯을 그림.
                     DrawAllSlots();
-
-                    // UI 스레드: Lock 안에서 오프스크린 → backbuffer 로 StretchRect 복사 후 AddDirtyRect.
-                    // backbuffer 는 한 번 SetBackBuffer 하고 이후 안 바꿈 → WPF 가 항상 같은 서피스를 봄.
-                    _dispatcher.Invoke(PresentToBackbuffer);
+                    _dispatcher.Invoke(PresentToImage);
 
                     double elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - start)
                         * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                    int sleep = 16 - (int)elapsedMs; // 1000ms / 60fps ≈ 16.67ms. 한 프레임에 허용된 시간 예산이 ~16ms
+                    int sleep = 16 - (int)elapsedMs; // ~60fps 예산
                     if (sleep > 0)
                     {
                         Thread.Sleep(sleep);
@@ -224,10 +287,9 @@ float4 main(PS_INPUT input) : COLOR0
             }
         }
 
-        // 렌더 스레드: 슬롯 정리 → 클리어 → 슬롯별 업로드+타일 드로우.
+        // 렌더 스레드: 슬롯 정리 → 클리어 → 슬롯별 준비 + 타일 드로우. immediate context 는 락으로 보호.
         private void DrawAllSlots()
         {
-            // 제거 요청된 슬롯 정리(텍스처/잔여 프레임 해제는 여기 렌더 스레드에서).
             foreach (KeyValuePair<int, Slot> kv in _slots)
             {
                 if (kv.Value.RemoveRequested && _slots.TryRemove(kv.Key, out Slot? removed))
@@ -236,19 +298,24 @@ float4 main(PS_INPUT input) : COLOR0
                 }
             }
 
-            _device!.SetRenderTarget(0, _offscreenRT!);
-            _device.Clear(ClearFlags.Target, new Vortice.Mathematics.Color((byte)0, (byte)0, (byte)0, (byte)255), 1f, 0);
-
-            // UI 가 알려준 타일 위치. 없으면 그릴 게 없음 → 검정 배경만.
-            TileRect[]? layout = _layout;
-            if (layout == null || layout.Length == 0)
-            {
-                return;
-            }
-
-            _device.BeginScene();
+            HwDeviceContext.Lock();
             try
             {
+                _context.OMSetRenderTargets(_offscreenRtv!);
+                _context.ClearRenderTargetView(_offscreenRtv!, new Color4(0f, 0f, 0f, 1f));
+
+                TileRect[]? layout = _layout;
+                if (layout == null || layout.Length == 0)
+                {
+                    return;
+                }
+
+                _context.VSSetShader(_vs);
+                _context.PSSetSampler(0, _sampler);
+                _context.PSSetConstantBuffer(0, _paramsCb);
+                _context.IASetInputLayout(null);
+                _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+
                 foreach (TileRect tile in layout)
                 {
                     if (!_slots.TryGetValue(tile.SlotId, out Slot? slot))
@@ -256,130 +323,227 @@ float4 main(PS_INPUT input) : COLOR0
                         continue;
                     }
 
-                    // 최신 프레임이 있으면 업로드 후 반납. 없으면 직전 텍스처 그대로.
-                    RtspYuvFrame? frame = Interlocked.Exchange(ref slot.Latest, null);
-                    if (frame != null)
-                    {
-                        try
-                        {
-                            // 이 스트림의 원본 픽셀을 담을 GPU 텍스처 만들기
-                            EnsureSlotTextures(slot, frame.Width, frame.Height);
-
-                            // 원본 YUV 데이터를 텍스처에 memcpy
-                            UploadFrame(slot, frame);
-                        }
-                        finally
-                        {
-                            frame.Dispose();
-                        }
-                    }
-
-                    if (!slot.HasTextures)
+                    UpdateSlot(slot);
+                    if (!slot.HasContent)
                     {
                         continue;
                     }
 
-                    // 1920×1080짜리 텍스처를 426×240 셀에 quad로 그려라 (GPU가 다운스케일)
-                    DrawTile(slot, tile.X, tile.Y, tile.Width, tile.Height);
+                    DrawTile(slot, tile);
                 }
+                // 실제 GPU 제출(Flush)은 PresentToImage 의 복사 직후 1회만 한다.
             }
             finally
             {
-                _device.EndScene();
+                HwDeviceContext.Unlock();
             }
         }
 
-        private void DrawTile(Slot slot, int x, int y, int w, int h)
+        // 슬롯의 최신 프레임을 받아 슬롯 소유 텍스처를 갱신한다(없으면 직전 텍스처 유지 → 재드로우).
+        private void UpdateSlot(Slot slot)
         {
-            for (int s = 0; s < 3; s++)
+            RtspD3D11Frame? hw = Interlocked.Exchange(ref slot.LatestD3D11, null);
+            if (hw != null)
             {
-                _device!.SetSamplerState(s, SamplerState.MinFilter, (int)TextureFilter.Linear);
-                _device.SetSamplerState(s, SamplerState.MagFilter, (int)TextureFilter.Linear);
-                _device.SetSamplerState(s, SamplerState.AddressU, (int)TextureAddress.Clamp);
-                _device.SetSamplerState(s, SamplerState.AddressV, (int)TextureAddress.Clamp);
+                try
+                {
+                    UpdateHardwareSlot(slot, hw);
+                }
+                finally
+                {
+                    hw.Dispose(); // 복사 끝났으니 디코드 surface 즉시 반납.
+                }
+                return;
             }
 
-            _device!.SetTexture(0, slot.YTex);
-            _device.SetTexture(1, slot.UTex);
-            _device.SetTexture(2, slot.VTex);
-            _device.PixelShader = _pixelShader;
-            _device.VertexFormat = VertexFormat.PositionRhw | VertexFormat.Texture3;
-
-            float left = x - 0.5f;
-            float top = y - 0.5f;
-            float right = x + w - 0.5f;
-            float bottom = y + h - 0.5f;
-
-            Span<Vertex> vertices =
-            [
-                new Vertex(left, top, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 0f),
-                new Vertex(right, top, 0f, 1f, 1f, 0f, 1f, 0f, 1f, 0f),
-                new Vertex(left, bottom, 0f, 1f, 0f, 1f, 0f, 1f, 0f, 1f),
-                new Vertex(right, bottom, 0f, 1f, 1f, 1f, 1f, 1f, 1f, 1f)
-            ];
-
-            unsafe
+            RtspYuvFrame? yuv = Interlocked.Exchange(ref slot.LatestYuv, null);
+            if (yuv != null)
             {
-                fixed (Vertex* p = vertices)
+                try
                 {
-                    _device.DrawPrimitiveUP(PrimitiveType.TriangleStrip, 2, (IntPtr)p, (uint)Marshal.SizeOf<Vertex>());
+                    UpdateSoftwareSlot(slot, yuv);
+                }
+                finally
+                {
+                    yuv.Dispose();
                 }
             }
         }
 
-        private void EnsureSlotTextures(Slot slot, int width, int height)
+        // HW: 디코드 NV12 텍스처 배열의 해당 슬라이스를 슬롯 소유 NV12 텍스처로 GPU→GPU 복사.
+        private void UpdateHardwareSlot(Slot slot, RtspD3D11Frame frame)
         {
-            if (slot.HasTextures && slot.TexWidth == width && slot.TexHeight == height)
-            {
-                return;
-            }
-
-            ReleaseSlotTextures(slot);
-            slot.YTex = _device!.CreateTexture((uint)width, (uint)height, 1, Usage.Dynamic, Format.L8, Pool.Default);
-            slot.UTex = _device.CreateTexture((uint)(width / 2), (uint)(height / 2), 1, Usage.Dynamic, Format.L8, Pool.Default);
-            slot.VTex = _device.CreateTexture((uint)(width / 2), (uint)(height / 2), 1, Usage.Dynamic, Format.L8, Pool.Default);
-            slot.TexWidth = width;
-            slot.TexHeight = height;
-        }
-
-        private static void UploadFrame(Slot slot, RtspYuvFrame frame)
-        {
-            int chromaHeight = (frame.Height + 1) / 2;
-            UploadPlane(slot.YTex!, frame.YPlane, frame.YStride, frame.Height);
-            UploadPlane(slot.UTex!, frame.UPlane, frame.UStride, chromaHeight);
-            UploadPlane(slot.VTex!, frame.VPlane, frame.VStride, chromaHeight);
-        }
-
-        private static unsafe void UploadPlane(IDirect3DTexture9 texture, byte[] source, int sourceStride, int rows)
-        {
-            LockedRectangle rect = texture.LockRect(0, LockFlags.Discard);
+            var srcTex = new D3D11Texture(frame.Texture);
+            srcTex.AddRef();
             try
             {
-                int copyStride = Math.Min(sourceStride, rect.Pitch);
+                Texture2DDescription srcDesc = srcTex.Description;
+                int codedW = (int)srcDesc.Width;
+                int codedH = (int)srcDesc.Height;
+
+                if (!slot.IsHardware || slot.Nv12Tex == null || slot.TexW != codedW || slot.TexH != codedH)
+                {
+                    ReleaseSlotTextures(slot);
+                    slot.IsHardware = true;
+                    slot.TexW = codedW;
+                    slot.TexH = codedH;
+
+                    slot.Nv12Tex = _device.CreateTexture2D(new Texture2DDescription
+                    {
+                        Width = (uint)codedW,
+                        Height = (uint)codedH,
+                        MipLevels = 1,
+                        ArraySize = 1,
+                        Format = DxgiFormat.NV12,
+                        SampleDescription = new SampleDescription(1, 0),
+                        Usage = ResourceUsage.Default,
+                        BindFlags = BindFlags.ShaderResource,
+                        CPUAccessFlags = CpuAccessFlags.None,
+                        MiscFlags = ResourceOptionFlags.None
+                    });
+
+                    slot.Srv0 = _device.CreateShaderResourceView(slot.Nv12Tex, new ShaderResourceViewDescription
+                    {
+                        Format = DxgiFormat.R8_UNorm,
+                        ViewDimension = ShaderResourceViewDimension.Texture2D,
+                        Texture2D = new Texture2DShaderResourceView { MostDetailedMip = 0, MipLevels = 1 }
+                    });
+                    slot.Srv1 = _device.CreateShaderResourceView(slot.Nv12Tex, new ShaderResourceViewDescription
+                    {
+                        Format = DxgiFormat.R8G8_UNorm,
+                        ViewDimension = ShaderResourceViewDimension.Texture2D,
+                        Texture2D = new Texture2DShaderResourceView { MostDetailedMip = 0, MipLevels = 1 }
+                    });
+                }
+
+                slot.UScale = codedW > 0 ? (float)frame.Width / codedW : 1f;
+                slot.VScale = codedH > 0 ? (float)frame.Height / codedH : 1f;
+
+                // 디코드 텍스처 배열의 arrayIndex 슬라이스(subresource = arrayIndex, mip 1개) → 슬롯 텍스처.
+                _context.CopySubresourceRegion(slot.Nv12Tex!, 0, 0, 0, 0, srcTex, (uint)frame.ArrayIndex);
+            }
+            finally
+            {
+                srcTex.Dispose();
+            }
+        }
+
+        // SW: YUV420P 평면을 슬롯 소유 Y/U/V(R8) 텍스처로 업로드.
+        private void UpdateSoftwareSlot(Slot slot, RtspYuvFrame frame)
+        {
+            int w = frame.Width;
+            int h = frame.Height;
+            int cw = (w + 1) / 2;
+            int ch = (h + 1) / 2;
+
+            if (slot.IsHardware || slot.YTex == null || slot.TexW != w || slot.TexH != h)
+            {
+                ReleaseSlotTextures(slot);
+                slot.IsHardware = false;
+                slot.TexW = w;
+                slot.TexH = h;
+                slot.UScale = 1f;
+                slot.VScale = 1f;
+
+                slot.YTex = CreateDynamicR8(w, h);
+                slot.UTex = CreateDynamicR8(cw, ch);
+                slot.VTex = CreateDynamicR8(cw, ch);
+                slot.Srv0 = _device.CreateShaderResourceView(slot.YTex, R8Srv());
+                slot.Srv1 = _device.CreateShaderResourceView(slot.UTex, R8Srv());
+                slot.Srv2 = _device.CreateShaderResourceView(slot.VTex, R8Srv());
+            }
+
+            UploadPlane(slot.YTex!, frame.YPlane, frame.YStride, w, h);
+            UploadPlane(slot.UTex!, frame.UPlane, frame.UStride, cw, ch);
+            UploadPlane(slot.VTex!, frame.VPlane, frame.VStride, cw, ch);
+        }
+
+        private D3D11Texture CreateDynamicR8(int w, int h)
+        {
+            return _device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)w,
+                Height = (uint)h,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = DxgiFormat.R8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Dynamic,
+                BindFlags = BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.Write,
+                MiscFlags = ResourceOptionFlags.None
+            });
+        }
+
+        private static ShaderResourceViewDescription R8Srv()
+        {
+            return new ShaderResourceViewDescription
+            {
+                Format = DxgiFormat.R8_UNorm,
+                ViewDimension = ShaderResourceViewDimension.Texture2D,
+                Texture2D = new Texture2DShaderResourceView { MostDetailedMip = 0, MipLevels = 1 }
+            };
+        }
+
+        private void UploadPlane(D3D11Texture texture, byte[] source, int sourceStride, int width, int rows)
+        {
+            MappedSubresource map = _context.Map(texture, 0, MapMode.WriteDiscard);
+            try
+            {
+                int copy = Math.Min(sourceStride, (int)map.RowPitch);
                 fixed (byte* srcBase = source)
                 {
                     byte* src = srcBase;
-                    byte* dst = (byte*)rect.DataPointer;
+                    byte* dst = (byte*)map.DataPointer;
                     for (int y = 0; y < rows; y++)
                     {
-                        Buffer.MemoryCopy(src, dst, rect.Pitch, copyStride);
+                        Buffer.MemoryCopy(src, dst, map.RowPitch, copy);
                         src += sourceStride;
-                        dst += rect.Pitch;
+                        dst += map.RowPitch;
                     }
                 }
             }
             finally
             {
-                texture.UnlockRect(0);
+                _context.Unmap(texture, 0);
             }
         }
 
-        // UI 스레드(Invoke 로 호출): 오프스크린의 그림을 backbuffer 로 복사 후 dirty 표시(프레임당 1회).
-        //   - SetBackBuffer 는 첫 호출에만 (이후 같은 서피스를 계속 씀 → 깜박임 없음)
-        //   - StretchRect 가 Lock 안에서 일어나므로 WPF 의 compose 와 안 부딪힘
-        private void PresentToBackbuffer()
+        private void DrawTile(Slot slot, TileRect tile)
         {
-            if (_device == null || _offscreenRT == null || _backbufferSurface == null)
+            // uvScale 상수 갱신.
+            MappedSubresource cb = _context.Map(_paramsCb!, 0, MapMode.WriteDiscard);
+            float* p = (float*)cb.DataPointer;
+            p[0] = slot.UScale;
+            p[1] = slot.VScale;
+            p[2] = 0f;
+            p[3] = 0f;
+            _context.Unmap(_paramsCb!, 0);
+
+            _context.RSSetViewport(new Viewport(tile.X, tile.Y, tile.Width, tile.Height, 0f, 1f));
+
+            if (slot.IsHardware)
+            {
+                _context.PSSetShader(_psNv12);
+                _context.PSSetShaderResource(0, slot.Srv0!);
+                _context.PSSetShaderResource(1, slot.Srv1!);
+            }
+            else
+            {
+                _context.PSSetShader(_psYuv420);
+                _context.PSSetShaderResource(0, slot.Srv0!);
+                _context.PSSetShaderResource(1, slot.Srv1!);
+                _context.PSSetShaderResource(2, slot.Srv2!);
+            }
+
+            _context.Draw(3, 0);
+        }
+
+        // UI 스레드: _image.Lock 안에서만 오프스크린 → 공유(백버퍼) 로 복사하고 dirty 표시.
+        // 백버퍼가 Lock 동안에만 갱신되므로 WPF 가 그리다 만 프레임을 읽지 않는다(깜박임 방지).
+        private void PresentToImage()
+        {
+            if (_d3d9Surface == null || _offscreenTex == null || _sharedTex == null)
             {
                 return;
             }
@@ -388,16 +552,21 @@ float4 main(PS_INPUT input) : COLOR0
             {
                 if (!_backbufferAttached)
                 {
-                    // 표시 원천을 이 서피스로 등록
-                    _image.SetBackBuffer(D3DResourceType.IDirect3DSurface9, _backbufferSurface.NativePointer);
+                    _image.SetBackBuffer(D3DResourceType.IDirect3DSurface9, _d3d9Surface.NativePointer);
                     _backbufferAttached = true;
                 }
-                var full = new Vortice.Direct3D9.Rect(0, 0, _width, _height);
 
-                // 그 서피스의 픽셀 내용을 새로 채움
-                _device.StretchRect(_offscreenRT, full, _backbufferSurface, full, TextureFilter.None);
+                HwDeviceContext.Lock();
+                try
+                {
+                    _context.CopyResource(_sharedTex, _offscreenTex);
+                    _context.Flush();
+                }
+                finally
+                {
+                    HwDeviceContext.Unlock();
+                }
 
-                // 그 서피스의 이 영역이 바뀌었으니 다시 읽어 그려
                 _image.AddDirtyRect(new Int32Rect(0, 0, _width, _height));
             }
             finally
@@ -406,55 +575,133 @@ float4 main(PS_INPUT input) : COLOR0
             }
         }
 
-        private void InitializeDevice()
+        private void InitializeResources()
         {
-            _d3d = D3D9.Direct3DCreate9Ex();
-            _device = _d3d.CreateDeviceEx(
+            _device = HwDeviceContext.Device
+                ?? throw new InvalidOperationException("D3D11 디바이스 생성 불가");
+            _context = HwDeviceContext.Context
+                ?? throw new InvalidOperationException("D3D11 컨텍스트 없음");
+
+            ReadOnlyMemory<byte> vsBytes = Compiler.Compile(
+                VertexShaderSource, "main", "CompositorVS", "vs_4_0");
+            _vs = _device.CreateVertexShader(vsBytes.Span);
+
+            ReadOnlyMemory<byte> nv12Bytes = Compiler.Compile(
+                PixelShaderNv12, "main", "CompositorNV12", "ps_4_0");
+            _psNv12 = _device.CreatePixelShader(nv12Bytes.Span);
+
+            ReadOnlyMemory<byte> yuvBytes = Compiler.Compile(
+                PixelShaderYuv420, "main", "CompositorYUV420", "ps_4_0");
+            _psYuv420 = _device.CreatePixelShader(yuvBytes.Span);
+
+            _sampler = _device.CreateSamplerState(new SamplerDescription
+            {
+                Filter = Filter.MinMagMipLinear,
+                AddressU = TextureAddressMode.Clamp,
+                AddressV = TextureAddressMode.Clamp,
+                AddressW = TextureAddressMode.Clamp,
+                ComparisonFunc = ComparisonFunction.Never,
+                MinLOD = 0,
+                MaxLOD = float.MaxValue
+            });
+
+            _paramsCb = _device.CreateBuffer(new BufferDescription
+            {
+                ByteWidth = 16,
+                Usage = ResourceUsage.Dynamic,
+                BindFlags = BindFlags.ConstantBuffer,
+                CPUAccessFlags = CpuAccessFlags.Write
+            });
+
+            // 오프스크린 RT: 렌더 스레드가 그리는 대상(WPF 가 직접 보지 않음).
+            _offscreenTex = _device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)_width,
+                Height = (uint)_height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = DxgiFormat.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.None
+            });
+            _offscreenRtv = _device.CreateRenderTargetView(_offscreenTex);
+
+            // 공유 텍스처: 오프스크린 복사 대상이자 D3D9 백버퍼. BGRA + Shared(레거시 핸들).
+            _sharedTex = _device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)_width,
+                Height = (uint)_height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = DxgiFormat.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.Shared
+            });
+
+            IntPtr sharedHandle;
+            using (IDXGIResource dxgiRes = _sharedTex.QueryInterface<IDXGIResource>())
+            {
+                sharedHandle = dxgiRes.SharedHandle;
+            }
+
+            _d3d9 = D3D9.Direct3DCreate9Ex();
+            _d3d9Device = _d3d9.CreateDeviceEx(
                 0,
                 DeviceType.Hardware,
-                _windowHandle,
+                GetMainWindowHandle(),
                 CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve,
-                new PresentParameters
+                new D9PresentParameters
                 {
                     BackBufferWidth = 1,
                     BackBufferHeight = 1,
-                    BackBufferFormat = Format.A8R8G8B8,
+                    BackBufferFormat = D9Format.A8R8G8B8,
                     BackBufferCount = 1,
-                    SwapEffect = SwapEffect.Discard,
+                    SwapEffect = D9SwapEffect.Discard,
                     Windowed = true,
                     PresentationInterval = PresentInterval.Immediate
                 });
 
-            ReadOnlyMemory<byte> shaderBytes = Compiler.Compile(
-                PixelShaderSource, "main", "Yuv420ToRgb", "ps_2_0",
-                ShaderFlags.OptimizationLevel3, EffectFlags.None);
-            _pixelShader = _device.CreatePixelShader(shaderBytes.Span);
-
-            _offscreenRT = CreateRenderTarget();
-            _backbufferSurface = CreateRenderTarget();
-        }
-
-        private IDirect3DSurface9 CreateRenderTarget()
-        {
-            return _device!.CreateRenderTargetEx(
-                (uint)_width, (uint)_height, Format.A8R8G8B8,
-                MultisampleType.None, 0, false, Usage.None);
+            // D3D11 공유 텍스처를 D3D9 텍스처로 연다(같은 VRAM). pSharedHandle 에 핸들을 넘기면
+            // 새 surface 를 만드는 대신 기존 공유 리소스를 연다.
+            IntPtr openHandle = sharedHandle;
+            _d3d9Tex = _d3d9Device.CreateTexture(
+                (uint)_width, (uint)_height, 1,
+                Vortice.Direct3D9.Usage.RenderTarget,
+                D9Format.A8R8G8B8,
+                Pool.Default,
+                ref openHandle);
+            _d3d9Surface = _d3d9Tex.GetSurfaceLevel(0);
         }
 
         private void ReleaseSlotTextures(Slot slot)
         {
-            slot.VTex?.Dispose();
-            slot.UTex?.Dispose();
+            slot.Srv0?.Dispose();
+            slot.Srv1?.Dispose();
+            slot.Srv2?.Dispose();
+            slot.Nv12Tex?.Dispose();
             slot.YTex?.Dispose();
-            slot.VTex = null;
-            slot.UTex = null;
+            slot.UTex?.Dispose();
+            slot.VTex?.Dispose();
+            slot.Srv0 = null;
+            slot.Srv1 = null;
+            slot.Srv2 = null;
+            slot.Nv12Tex = null;
             slot.YTex = null;
+            slot.UTex = null;
+            slot.VTex = null;
         }
 
         private void ReleaseSlot(Slot slot)
         {
             ReleaseSlotTextures(slot);
-            Interlocked.Exchange(ref slot.Latest, null)?.Dispose();
+            Interlocked.Exchange(ref slot.LatestYuv, null)?.Dispose();
+            Interlocked.Exchange(ref slot.LatestD3D11, null)?.Dispose();
         }
 
         private void ReleaseAll()
@@ -465,16 +712,32 @@ float4 main(PS_INPUT input) : COLOR0
             }
             _slots.Clear();
 
-            _pixelShader?.Dispose();
-            _backbufferSurface?.Dispose();
-            _offscreenRT?.Dispose();
-            _device?.Dispose();
-            _d3d?.Dispose();
-            _pixelShader = null;
-            _backbufferSurface = null;
-            _offscreenRT = null;
-            _device = null;
-            _d3d = null;
+            _d3d9Surface?.Dispose();
+            _d3d9Tex?.Dispose();
+            _d3d9Device?.Dispose();
+            _d3d9?.Dispose();
+            _offscreenRtv?.Dispose();
+            _offscreenTex?.Dispose();
+            _sharedTex?.Dispose();
+            _paramsCb?.Dispose();
+            _sampler?.Dispose();
+            _psNv12?.Dispose();
+            _psYuv420?.Dispose();
+            _vs?.Dispose();
+
+            _d3d9Surface = null;
+            _d3d9Tex = null;
+            _d3d9Device = null;
+            _d3d9 = null;
+            _offscreenRtv = null;
+            _offscreenTex = null;
+            _sharedTex = null;
+            _paramsCb = null;
+            _sampler = null;
+            _psNv12 = null;
+            _psYuv420 = null;
+            _vs = null;
+            // _device/_context 는 HwDeviceContext 소유라 여기서 해제하지 않는다.
         }
 
         private static IntPtr GetMainWindowHandle()
@@ -498,28 +761,6 @@ float4 main(PS_INPUT input) : COLOR0
                     _image.Unlock();
                 }
             });
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private readonly struct Vertex
-        {
-            public Vertex(float x, float y, float z, float rhw,
-                float tu0, float tv0, float tu1, float tv1, float tu2, float tv2)
-            {
-                X = x; Y = y; Z = z; Rhw = rhw;
-                Tu0 = tu0; Tv0 = tv0; Tu1 = tu1; Tv1 = tv1; Tu2 = tu2; Tv2 = tv2;
-            }
-
-            private readonly float X;
-            private readonly float Y;
-            private readonly float Z;
-            private readonly float Rhw;
-            private readonly float Tu0;
-            private readonly float Tv0;
-            private readonly float Tu1;
-            private readonly float Tv1;
-            private readonly float Tu2;
-            private readonly float Tv2;
         }
     }
 }

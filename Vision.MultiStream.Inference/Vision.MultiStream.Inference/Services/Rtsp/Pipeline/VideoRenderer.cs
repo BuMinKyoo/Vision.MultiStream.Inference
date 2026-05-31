@@ -44,6 +44,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private readonly ChannelWriter<RtspFrame> _inferenceWriter;
         private readonly Func<RtspFrame, bool> _raiseFrameCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
+        private readonly Action<RtspD3D11Frame> _raiseD3D11Captured;
         private readonly Action<string> _onStatus;
 
         private SwsContext* _swsCtx;
@@ -60,6 +61,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             ChannelWriter<RtspFrame> inferenceWriter,
             Func<RtspFrame, bool> raiseFrameCaptured,
             Action<RtspYuvFrame> raiseYuvCaptured,
+            Action<RtspD3D11Frame> raiseD3D11Captured,
             Action<string> onStatus)
         {
             _frameQueue = frameQueue;
@@ -69,6 +71,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             _inferenceWriter = inferenceWriter;
             _raiseFrameCaptured = raiseFrameCaptured;
             _raiseYuvCaptured = raiseYuvCaptured;
+            _raiseD3D11Captured = raiseD3D11Captured;
             _onStatus = onStatus;
         }
 
@@ -88,10 +91,23 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             {
                 foreach (IntPtr framePtr in _frameQueue.GetConsumingEnumerable(ct))
                 {
-                    AVFrame* frame = (AVFrame*)framePtr;
+                    AVFrame* originalFrame = (AVFrame*)framePtr;
+
+                    // HW(D3D11) 프레임: CPU 다운로드 없이 GPU 텍스처를 컴포지터로 직접 핸드오프.
+                    // 이 분기는 프레임 소유권을 PresentHardware 가 가져간다(여기서 free 하지 않음).
+                    if (originalFrame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11)
+                    {
+                        if (!PresentHardware(originalFrame, ct))
+                        {
+                            return;
+                        }
+                        continue;
+                    }
+
+                    // SW 경로: YUV420P 프레임을 페이싱·변환·발행하고 여기서 소유권을 해제한다.
                     try
                     {
-                        if (!Present(frame, ct))
+                        if (!Present(originalFrame, ct))
                         {
                             // 취소로 인한 조기 종료.
                             return;
@@ -99,7 +115,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     }
                     finally
                     {
-                        AVFrame* f = frame;
+                        AVFrame* f = originalFrame;
                         ffmpeg.av_frame_free(&f);
                     }
                 }
@@ -110,6 +126,129 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             catch (Exception ex)
             {
                 _onStatus($"비디오 렌더러 오류: {ex.Message}");
+            }
+        }
+
+        // HW(D3D11) 프레임을 페이싱한 뒤 GPU 텍스처 그대로 컴포지터로 핸드오프한다.
+        // 프레임 소유권은 이 메서드가 가져간다(drop/취소 시 free, 표시 시 RtspD3D11Frame 으로 이전).
+        // 취소로 빠져나가야 하면 false.
+        private bool PresentHardware(AVFrame* frame, CancellationToken ct)
+        {
+            double ptsSeconds = FfmpegNative.PtsToSeconds(frame->pts, _timeBase);
+
+            // ===== PTS 게이트 (SW 경로와 동일) =====
+            if (!double.IsNaN(ptsSeconds))
+            {
+                if (!_clock.IsReady)
+                {
+                    _clock.Anchor(ptsSeconds);
+                }
+
+                TimeSpan delay = _clock.GetDelay(ptsSeconds);
+                if (delay < TimeSpan.FromMilliseconds(-100))
+                {
+                    // 너무 늦음 → drop.
+                    FreeFrame(frame);
+                    return true;
+                }
+                if (delay > TimeSpan.FromMilliseconds(5))
+                {
+                    if (ct.WaitHandle.WaitOne(delay))
+                    {
+                        FreeFrame(frame);
+                        return false;
+                    }
+                }
+            }
+
+            // 추론 ON 인 스트림만 GPU→CPU 다운로드 + BGR 변환(드문 경로).
+            if (_settings.ReaderFramesEnabled)
+            {
+                EmitInferenceFromHw(frame, ptsSeconds);
+            }
+
+            // 표시: GPU 프레임을 그대로 컴포지터로. RtspD3D11Frame 이 frame ref 소유권을 가져간다
+            // (해상도(ImageWidth/Height) 알림은 표시 경로 VM 핸들러가 처리).
+            var d3d11 = new RtspD3D11Frame((IntPtr)frame, ptsSeconds);
+            _raiseD3D11Captured(d3d11);
+            return true;
+        }
+
+        private static void FreeFrame(AVFrame* frame)
+        {
+            AVFrame* f = frame;
+            ffmpeg.av_frame_free(&f);
+        }
+
+        // 추론용: HW 프레임을 NV12 sw frame 으로 다운로드한 뒤 BGR24 로 변환해 추론 채널로 보낸다.
+        private void EmitInferenceFromHw(AVFrame* hw, double ptsSeconds)
+        {
+            AVFrame* sw = ffmpeg.av_frame_alloc();
+            if (sw == null)
+            {
+                return;
+            }
+            try
+            {
+                if (ffmpeg.av_hwframe_transfer_data(sw, hw, 0) < 0)
+                {
+                    return;
+                }
+                ffmpeg.av_frame_copy_props(sw, hw);
+                EmitBgrForInference(sw, ptsSeconds);
+            }
+            finally
+            {
+                ffmpeg.av_frame_free(&sw);
+            }
+        }
+
+        // sw frame(보통 NV12) → BGR24 변환 후 추론 채널로 전달. 표시는 컴포지터가 담당하므로 여기선 추론만.
+        private void EmitBgrForInference(AVFrame* frame, double ptsSeconds)
+        {
+            int w = frame->width;
+            int h = frame->height;
+            if (_swsCtx == null || w != _knownW || h != _knownH)
+            {
+                if (_swsCtx != null)
+                {
+                    ffmpeg.sws_freeContext(_swsCtx);
+                    _swsCtx = null;
+                }
+                _swsCtx = ffmpeg.sws_getContext(
+                    w, h, (AVPixelFormat)frame->format,
+                    w, h, AVPixelFormat.AV_PIX_FMT_BGR24,
+                    2, null, null, null);
+                _dstBufSize = ffmpeg.av_image_get_buffer_size(AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
+                _knownW = w;
+                _knownH = h;
+            }
+            if (_swsCtx == null)
+            {
+                return;
+            }
+
+            IntPtr buffer = Marshal.AllocHGlobal(_dstBufSize);
+            try
+            {
+                byte_ptrArray4 dstData = default;
+                int_array4 dstLinesize = default;
+                ffmpeg.av_image_fill_arrays(
+                    ref dstData, ref dstLinesize, (byte*)buffer,
+                    AVPixelFormat.AV_PIX_FMT_BGR24, w, h, 1);
+
+                using (PerfProbe.Measure("rtsp.sws_scale.bgr24"))
+                {
+                    ffmpeg.sws_scale(_swsCtx, frame->data, frame->linesize, 0, h, dstData, dstLinesize);
+                }
+
+                byte[] managed = new byte[_dstBufSize];
+                Marshal.Copy(buffer, managed, 0, _dstBufSize);
+                _inferenceWriter.TryWrite(new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
             }
         }
 
