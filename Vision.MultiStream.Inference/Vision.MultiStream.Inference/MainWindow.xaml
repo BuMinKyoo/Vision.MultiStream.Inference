@@ -63,7 +63,7 @@
         <TabItem Header="RTSP (다중 스트림)" DataContext="{Binding MultiStream}">
             <Grid Margin="8">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="320"/>
+                    <ColumnDefinition Width="360"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
@@ -103,13 +103,18 @@
                                               ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                    <TextBlock Text="디코더:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <RadioButton Content="SW" IsChecked="{Binding NewUseSoftwareDecoding}" GroupName="NewDecoder"
+                                    <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="CPU+개별" IsChecked="{Binding NewModeCpuIndividual}" GroupName="NewRenderMode"
                                                  VerticalAlignment="Center"
-                                                 ToolTip="소프트웨어(CPU) 디코딩"/>
-                                    <RadioButton Content="HW" IsChecked="{Binding NewUseHardwareDecoding}" GroupName="NewDecoder" Margin="8,0,0,0"
+                                                 ToolTip="SW 디코딩 + per-stream 개별 표시"/>
+                                    <RadioButton Content="CPU+컴포지터" IsChecked="{Binding NewModeCpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,0"
                                                  VerticalAlignment="Center"
-                                                 ToolTip="하드웨어(D3D11VA) 디코딩 — 실패 시 폴백 없이 에러"/>
+                                                 IsEnabled="{Binding IsCompositorAvailable}"
+                                                 ToolTip="SW 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
+                                    <RadioButton Content="GPU+컴포지터" IsChecked="{Binding NewModeGpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,0"
+                                                 VerticalAlignment="Center"
+                                                 IsEnabled="{Binding IsCompositorAvailable}"
+                                                 ToolTip="HW(D3D11VA) 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                     <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28"/>

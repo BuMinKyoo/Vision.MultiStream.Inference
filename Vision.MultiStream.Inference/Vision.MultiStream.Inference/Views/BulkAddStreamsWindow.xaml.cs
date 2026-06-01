@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using Vision.MultiStream.Inference.Services.Yolo;
+using Vision.MultiStream.Inference.ViewModels;
 
 namespace Vision.MultiStream.Inference.Views
 {
@@ -14,7 +15,18 @@ namespace Vision.MultiStream.Inference.Views
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
         public bool SelectedInferenceEnabled { get; private set; } = true;
-        public bool SelectedUseHardwareDecoding { get; private set; }
+        public StreamRenderMode SelectedRenderMode { get; private set; } = StreamRenderMode.CpuIndividual;
+
+        // 컴포지터가 없으면(GPU 없음) 컴포지터 모드 라디오를 비활성화. AddBulk 가 ShowDialog 전에 설정.
+        public bool CompositorAvailable
+        {
+            get => CpuCompositorRadio.IsEnabled;
+            set
+            {
+                CpuCompositorRadio.IsEnabled = value;
+                GpuCompositorRadio.IsEnabled = value;
+            }
+        }
 
         private string[] _urls = Array.Empty<string>();
 
@@ -39,7 +51,19 @@ namespace Vision.MultiStream.Inference.Views
             }
 
             SelectedInferenceEnabled = InferenceCheck.IsChecked == true;
-            SelectedUseHardwareDecoding = HwDecoderRadio.IsChecked == true;
+
+            if (GpuCompositorRadio.IsChecked == true)
+            {
+                SelectedRenderMode = StreamRenderMode.GpuCompositor;
+            }
+            else if (CpuCompositorRadio.IsChecked == true)
+            {
+                SelectedRenderMode = StreamRenderMode.CpuCompositor;
+            }
+            else
+            {
+                SelectedRenderMode = StreamRenderMode.CpuIndividual;
+            }
 
             DialogResult = true;
             Close();

@@ -16,6 +16,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
     {
         private volatile bool _readerFramesEnabled;
         private volatile bool _useYuvDisplayFrames;
+        private volatile bool _useCompositorDisplay;
 
         public bool ReaderFramesEnabled
         {
@@ -27,6 +28,14 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         {
             get => _useYuvDisplayFrames;
             set => _useYuvDisplayFrames = value;
+        }
+
+        // 표시 경로 선택. true=컴포지터(YuvFrameCaptured), false=개별 per-stream(YuvIndividualFrameCaptured).
+        // VideoRenderer.Present 가 이 값으로 어느 이벤트로 YUV 프레임을 발행할지 분기한다.
+        public bool UseCompositorDisplay
+        {
+            get => _useCompositorDisplay;
+            set => _useCompositorDisplay = value;
         }
     }
 
@@ -44,6 +53,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private readonly ChannelWriter<RtspFrame> _inferenceWriter;
         private readonly Func<RtspFrame, bool> _raiseFrameCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
+        private readonly Action<RtspYuvFrame> _raiseYuvIndividualCaptured;
         private readonly Action<RtspD3D11Frame> _raiseD3D11Captured;
         private readonly Action<string> _onStatus;
 
@@ -61,6 +71,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             ChannelWriter<RtspFrame> inferenceWriter,
             Func<RtspFrame, bool> raiseFrameCaptured,
             Action<RtspYuvFrame> raiseYuvCaptured,
+            Action<RtspYuvFrame> raiseYuvIndividualCaptured,
             Action<RtspD3D11Frame> raiseD3D11Captured,
             Action<string> onStatus)
         {
@@ -71,6 +82,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             _inferenceWriter = inferenceWriter;
             _raiseFrameCaptured = raiseFrameCaptured;
             _raiseYuvCaptured = raiseYuvCaptured;
+            _raiseYuvIndividualCaptured = raiseYuvIndividualCaptured;
             _raiseD3D11Captured = raiseD3D11Captured;
             _onStatus = onStatus;
         }
@@ -288,7 +300,18 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             {
                 using (PerfProbe.Measure("rtsp.yuv420.copy"))
                 {
-                    _raiseYuvCaptured(CopyYuv420Frame(frame, capturedAt, ptsSeconds));
+                    RtspYuvFrame yuv = CopyYuv420Frame(frame, capturedAt, ptsSeconds);
+
+                    // 표시 경로 분기: 컴포지터 모드면 컴포지터 이벤트로, 개별 모드면 별도 개별 이벤트로 발행한다.
+                    // 구독자(StreamItemViewModel)는 각 이벤트에 전용 핸들러 하나씩만 붙으므로 핸들러 내부 분기가 없다.
+                    if (_settings.UseCompositorDisplay)
+                    {
+                        _raiseYuvCaptured(yuv);
+                    }
+                    else
+                    {
+                        _raiseYuvIndividualCaptured(yuv);
+                    }
                 }
 
                 // 추론이 꺼져 있으면 BGR 변환은 건너뛴다.

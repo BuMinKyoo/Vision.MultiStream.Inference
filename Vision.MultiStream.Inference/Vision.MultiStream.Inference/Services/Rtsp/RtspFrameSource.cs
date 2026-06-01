@@ -76,9 +76,19 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             set => _settings.UseYuvDisplayFrames = value;
         }
 
+        // true=컴포지터 표시 경로(YuvFrameCaptured 발행), false=개별 표시 경로(YuvIndividualFrameCaptured 발행).
+        public bool UseCompositorDisplay
+        {
+            get => _settings.UseCompositorDisplay;
+            set => _settings.UseCompositorDisplay = value;
+        }
+
         public event EventHandler<string>? StatusChanged;
         public event EventHandler<RtspFrame>? FrameCaptured;
+        // 컴포지터 표시 경로 전용 YUV 프레임.
         public event EventHandler<RtspYuvFrame>? YuvFrameCaptured;
+        // 개별(per-stream) 표시 경로 전용 YUV 프레임.
+        public event EventHandler<RtspYuvFrame>? YuvIndividualFrameCaptured;
         public event EventHandler<RtspD3D11Frame>? D3D11FrameCaptured;
 
         /// <summary>
@@ -162,7 +172,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                 videoRenderer = new VideoRenderer(
                     videoFrameQueue, info.VideoTimeBase, _clock, _settings,
-                    _channel.Writer, RaiseFrameCaptured, RaiseYuvCaptured, RaiseD3D11Captured, RaiseStatus);
+                    _channel.Writer, RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
 
                 BlockingCollection<IntPtr>? audioPacketQueue = null;
                 BlockingCollection<AudioFrame>? audioFrameQueue = null;
@@ -314,6 +324,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         private void RaiseYuvCaptured(RtspYuvFrame frame)
         {
             YuvFrameCaptured?.Invoke(this, frame);
+        }
+
+        private void RaiseYuvIndividualCaptured(RtspYuvFrame frame)
+        {
+            YuvIndividualFrameCaptured?.Invoke(this, frame);
         }
 
         // HW(D3D11) 표시 프레임. 구독자(VM→컴포지터)가 없으면 GPU ref 가 새지 않도록 즉시 Dispose.

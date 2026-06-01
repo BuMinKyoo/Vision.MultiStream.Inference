@@ -14,6 +14,15 @@ namespace Vision.MultiStream.Inference.ViewModels
     public enum LayoutMode { Auto, Grid2x2, Grid3x3, Grid4x4 }
 
     /// <summary>
+    /// 스트림 표시/디코딩 방식.
+    ///   - CpuIndividual : SW 디코딩 + per-stream 개별 표시(D3DImageYuvPresenter).
+    ///   - CpuCompositor : SW 디코딩 + 단일 컴포지터 표시.
+    ///   - GpuCompositor : HW(D3D11VA) 디코딩 + 단일 컴포지터 표시.
+    /// 컴포지터 두 모드는 GPU/컴포지터가 있어야 선택 가능하다.
+    /// </summary>
+    public enum StreamRenderMode { CpuIndividual, CpuCompositor, GpuCompositor }
+
+    /// <summary>
     /// 다중 RTSP 스트림 관리 ViewModel.
     /// 책임: StreamItemViewModel 컬렉션 + 사이드 패널의 추가/삭제/일괄/전체시작중지/레이아웃 명령.
     /// 추론 디바이스(IRtspFrameDetector)는 이미 SerializedFrameDetector로 래핑된 상태로 주입받음.
@@ -26,7 +35,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _newRtspUrl = "rtsp://localhost:8554/cam1";
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
         private bool _newUseInference = true;
-        private bool _newUseHardwareDecoding;
+        // 컴포지터가 없으면(GPU 없음) 기본값은 개별. AttachCompositor 시 컴포지터 모드로 올린다.
+        private StreamRenderMode _newRenderMode = StreamRenderMode.CpuIndividual;
         private LayoutMode _layout = LayoutMode.Auto;
         private int _autoCounter = 1;
         private StreamCompositor? _compositor;
@@ -70,12 +80,19 @@ namespace Vision.MultiStream.Inference.ViewModels
         public void AttachCompositor(StreamCompositor compositor)
         {
             _compositor = compositor;
+
+            // 컴포지터가 생겼으니 컴포지터 라디오를 활성화한다(기본 선택값은 바꾸지 않음).
+            OnPropertyChanged(nameof(IsCompositorAvailable));
+
             foreach (var s in Streams)
             {
                 WireStream(s);
             }
             RecomputeLayout();
         }
+
+        // 컴포지터가 만들어졌는지(=CPU+컴포지터 / GPU+컴포지터 선택 가능 여부). 라디오 IsEnabled 바인딩용.
+        public bool IsCompositorAvailable => _compositor != null;
 
         // 스트림 추가 시 컴포지터 연결 + 슬롯 변경 이벤트 구독.
         private void WireStream(StreamItemViewModel item)
@@ -252,32 +269,56 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        // 디코더 선택 라디오. 기본값은 SW. HW 는 D3D11VA 분기로 가지만 현재 Stage 1 에서는
-        // VideoDecoder.Open() 이 "HW 미구현" 으로 실패 처리한다 (Stage 2 에서 실제 구현).
-        public bool NewUseSoftwareDecoding
+        // 표시/디코딩 모드 선택 라디오 3종. 컴포지터 두 모드는 IsCompositorAvailable 일 때만 켤 수 있다.
+        public StreamRenderMode NewRenderMode
         {
-            get => !_newUseHardwareDecoding;
+            get => _newRenderMode;
             set
             {
-                if (value && _newUseHardwareDecoding)
+                if (_newRenderMode == value)
                 {
-                    _newUseHardwareDecoding = false;
-                    OnPropertyChanged();
-                    OnPropertyChanged(nameof(NewUseHardwareDecoding));
+                    return;
+                }
+                _newRenderMode = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(NewModeCpuIndividual));
+                OnPropertyChanged(nameof(NewModeCpuCompositor));
+                OnPropertyChanged(nameof(NewModeGpuCompositor));
+            }
+        }
+
+        public bool NewModeCpuIndividual
+        {
+            get => _newRenderMode == StreamRenderMode.CpuIndividual;
+            set
+            {
+                if (value)
+                {
+                    NewRenderMode = StreamRenderMode.CpuIndividual;
                 }
             }
         }
 
-        public bool NewUseHardwareDecoding
+        public bool NewModeCpuCompositor
         {
-            get => _newUseHardwareDecoding;
+            get => _newRenderMode == StreamRenderMode.CpuCompositor;
             set
             {
-                if (value && !_newUseHardwareDecoding)
+                if (value)
                 {
-                    _newUseHardwareDecoding = true;
-                    OnPropertyChanged();
-                    OnPropertyChanged(nameof(NewUseSoftwareDecoding));
+                    NewRenderMode = StreamRenderMode.CpuCompositor;
+                }
+            }
+        }
+
+        public bool NewModeGpuCompositor
+        {
+            get => _newRenderMode == StreamRenderMode.GpuCompositor;
+            set
+            {
+                if (value)
+                {
+                    NewRenderMode = StreamRenderMode.GpuCompositor;
                 }
             }
         }
@@ -323,7 +364,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newUseHardwareDecoding);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -333,7 +374,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             var dialog = new BulkAddStreamsWindow
             {
-                Owner = Application.Current?.MainWindow
+                Owner = Application.Current?.MainWindow,
+                CompositorAvailable = IsCompositorAvailable
             };
 
             if (dialog.ShowDialog() != true)
@@ -343,7 +385,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             InferenceDevice device = dialog.SelectedDevice;
             bool inferenceEnabled = dialog.SelectedInferenceEnabled;
-            bool useHardwareDecoding = dialog.SelectedUseHardwareDecoding;
+            StreamRenderMode renderMode = dialog.SelectedRenderMode;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -351,14 +393,14 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, useHardwareDecoding));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, bool useHardwareDecoding)
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode)
         {
-            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, useHardwareDecoding);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode);
             WireStream(item);
             return item;
         }

@@ -49,7 +49,10 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _name;
         private string _rtspUrl;
         private InferenceDevice _device;
+        private readonly StreamRenderMode _renderMode;
+        // 모드에서 파생: GPU+컴포지터면 HW 디코딩, 개별이 아니면 컴포지터 표시.
         private readonly bool _useHardwareDecoding;
+        private readonly bool _useCompositor;
         private bool _isVideoEnabled;
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
@@ -100,12 +103,14 @@ namespace Vision.MultiStream.Inference.ViewModels
             Func<InferenceDevice, IRtspFrameDetector> detectorResolver,
             Action<StreamItemViewModel> onRemoveRequested,
             bool initialInferenceEnabled = true,
-            bool useHardwareDecoding = false)
+            StreamRenderMode renderMode = StreamRenderMode.CpuIndividual)
         {
             _name = name;
             _rtspUrl = rtspUrl;
             _device = device;
-            _useHardwareDecoding = useHardwareDecoding;
+            _renderMode = renderMode;
+            _useHardwareDecoding = renderMode == StreamRenderMode.GpuCompositor;
+            _useCompositor = renderMode != StreamRenderMode.CpuIndividual;
             _isInferenceEnabled = initialInferenceEnabled;
             _detectorResolver = detectorResolver;
             _onRemoveRequested = onRemoveRequested;
@@ -185,9 +190,15 @@ namespace Vision.MultiStream.Inference.ViewModels
             _ => "CPU"
         };
 
-        // 디코더 종류 표시용 배지. 생성 후 변경 불가(읽기 전용).
+        // 표시/디코딩 모드 배지. 생성 후 변경 불가(읽기 전용).
         public bool UseHardwareDecoding => _useHardwareDecoding;
-        public string DecoderLabel => _useHardwareDecoding ? "D3D11VA" : "SW";
+        public StreamRenderMode RenderMode => _renderMode;
+        public string DecoderLabel => _renderMode switch
+        {
+            StreamRenderMode.GpuCompositor => "컴포지터(GPU)",
+            StreamRenderMode.CpuCompositor => "컴포지터(CPU)",
+            _ => "개별"
+        };
 
         public bool UseCpu
         {
@@ -621,8 +632,9 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _displayFpsCounter.Reset();
                 _inferenceFpsCounter.Reset();
 
-                // 컴포지터가 붙어 있으면 슬롯 등록 (프레임 도착 전에) + 레이아웃 재계산 트리거.
-                if (_compositor != null)
+                // 컴포지터 모드이고 컴포지터가 붙어 있을 때만 슬롯 등록(프레임 도착 전에) + 레이아웃 재계산.
+                // 개별 모드는 컴포지터가 있어도 슬롯을 잡지 않고 per-stream 경로로 간다.
+                if (_useCompositor && _compositor != null)
                 {
                     _compositorSlot = _compositor.RegisterStream();
                     CompositorSlotChanged?.Invoke();
@@ -631,9 +643,12 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source = new RtspFrameSource(RtspUrl);
                 _source.ReaderFramesEnabled = _isInferenceEnabled;
                 _source.UseYuvDisplayFrames = true;
+                // 표시 경로 선택: 렌더러가 이 값으로 YuvFrameCaptured / YuvIndividualFrameCaptured 중 하나만 발행한다.
+                _source.UseCompositorDisplay = _useCompositor;
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.FrameCaptured += OnFrameCapturedForDisplay;
-                _source.YuvFrameCaptured += OnYuvFrameCapturedForDisplay;
+                _source.YuvFrameCaptured += OnYuvFrameCapturedForCompositor;
+                _source.YuvIndividualFrameCaptured += OnYuvFrameCapturedForIndividual;
                 _source.D3D11FrameCaptured += OnD3D11FrameCapturedForDisplay;
 
                 // 오디오 출력은 항상 생성. 토글 OFF 상태면 muted 로 시작.
@@ -721,7 +736,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (_source != null)
                 {
                     _source.FrameCaptured -= OnFrameCapturedForDisplay;
-                    _source.YuvFrameCaptured -= OnYuvFrameCapturedForDisplay;
+                    _source.YuvFrameCaptured -= OnYuvFrameCapturedForCompositor;
+                    _source.YuvIndividualFrameCaptured -= OnYuvFrameCapturedForIndividual;
                     _source.D3D11FrameCaptured -= OnD3D11FrameCapturedForDisplay;
                     _source.StatusChanged -= OnSourceStatusChanged;
                     _source.Stop();
@@ -846,32 +862,39 @@ namespace Vision.MultiStream.Inference.ViewModels
             _compositor.SubmitD3D11Frame(_compositorSlot, frame);
         }
 
-        private void OnYuvFrameCapturedForDisplay(object? sender, RtspYuvFrame frame)
+        // 컴포지터 표시 경로 전용 핸들러. 렌더러가 컴포지터 모드일 때만 이 이벤트로 발행하므로 내부 분기가 없다.
+        // 프레임을 컴포지터에 넘기고(소유권 이전) per-stream 표시 경로는 쓰지 않는다.
+        // DrainYuvDisplayFrame 을 안 거치므로 FPS tick + ImageWidth/Height 갱신은 여기서.
+        // ImageWidth/Height 는 검출박스 오버레이 Grid 의 좌표계(원본 해상도) 라서 0 이면 박스가 안 보임.
+        private void OnYuvFrameCapturedForCompositor(object? sender, RtspYuvFrame frame)
         {
-            // 컴포지터 경로: 프레임을 컴포지터에 넘기고(소유권 이전) per-stream 표시 경로는 건너뛴다.
-            // DrainYuvDisplayFrame 을 안 거치므로 FPS tick + ImageWidth/Height 갱신은 여기서.
-            // ImageWidth/Height 는 검출박스 오버레이 Grid 의 좌표계(원본 해상도) 라서 0 이면 박스가 안 보임.
-            if (_compositor != null)
+            // 모드는 컴포지터지만 컴포지터가 없으면(이론상 발생 안 함) 프레임을 폐기해 누수를 막는다.
+            if (_compositor == null)
             {
-                _displayFpsCounter.Tick(out double fps);
-                DisplayFps = fps;
-                if (_imageWidth != frame.Width || _imageHeight != frame.Height)
-                {
-                    int w = frame.Width;
-                    int h = frame.Height;
-                    _dispatcher.BeginInvoke(() =>
-                    {
-                        ImageWidth = w;
-                        ImageHeight = h;
-                    });
-                }
-                _compositor.SubmitFrame(_compositorSlot, frame);
+                frame.Dispose();
                 return;
             }
 
-            // 컴포지터가 생성되지 않으면(gpu가 없으면) 여기로직으로 빠짐
-            // 아직 표시되지 않은 직전 프레임은 버려지므로 풀에 반납한다(누수 방지).
-            // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다
+            _displayFpsCounter.Tick(out double fps);
+            DisplayFps = fps;
+            if (_imageWidth != frame.Width || _imageHeight != frame.Height)
+            {
+                int w = frame.Width;
+                int h = frame.Height;
+                _dispatcher.BeginInvoke(() =>
+                {
+                    ImageWidth = w;
+                    ImageHeight = h;
+                });
+            }
+            _compositor.SubmitFrame(_compositorSlot, frame);
+        }
+
+        // 개별(per-stream) 표시 경로 전용 핸들러. 렌더러가 개별 모드일 때만 이 이벤트로 발행한다.
+        // 아직 표시되지 않은 직전 프레임은 버려지므로 풀에 반납한다(누수 방지).
+        // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다.
+        private void OnYuvFrameCapturedForIndividual(object? sender, RtspYuvFrame frame)
+        {
             RtspYuvFrame? dropped = Interlocked.Exchange(ref _latestYuvFrame, frame);
             dropped?.Dispose();
             if (Interlocked.CompareExchange(ref _yuvDisplayPumpScheduled, 1, 0) == 0)
