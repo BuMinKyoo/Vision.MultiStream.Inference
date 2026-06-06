@@ -1041,30 +1041,39 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 await foreach (RtspFrame frame in _source.Reader.ReadAllAsync(ct))
                 {
-                    if (ct.IsCancellationRequested)
+                    try
                     {
-                        break;
-                    }
-
-                    IRtspFrameDetector detector = _detectorResolver(_device);
-                    var (detections, timings) = await detector
-                        .DetectAsync(frame.BgrPixels, frame.Width, frame.Height, ct)
-                        .ConfigureAwait(false);
-
-                    _inferenceFpsCounter.Tick(out double fps);
-
-                    _ = _dispatcher.BeginInvoke(() =>
-                    {
-                        Detections.Clear();
-                        foreach (Detection d in detections)
+                        if (ct.IsCancellationRequested)
                         {
-                            Detections.Add(d);
+                            break;
                         }
-                        InferenceFps = fps;
-                        PreprocessMs = timings.PreprocessMs;
-                        InferenceMs = timings.InferenceMs;
-                        PostprocessMs = timings.PostprocessMs;
-                    }, DispatcherPriority.Background);
+
+                        IRtspFrameDetector detector = _detectorResolver(_device);
+                        var (detections, timings) = await detector
+                            .DetectAsync(frame.BgrPixels, frame.Width, frame.Height, ct)
+                            .ConfigureAwait(false);
+
+                        _inferenceFpsCounter.Tick(out double fps);
+
+                        _ = _dispatcher.BeginInvoke(() =>
+                        {
+                            Detections.Clear();
+                            foreach (Detection d in detections)
+                            {
+                                Detections.Add(d);
+                            }
+                            InferenceFps = fps;
+                            PreprocessMs = timings.PreprocessMs;
+                            InferenceMs = timings.InferenceMs;
+                            PostprocessMs = timings.PostprocessMs;
+                        }, DispatcherPriority.Background);
+                    }
+                    finally
+                    {
+                        // 추론 입력 BGR 버퍼를 풀로 반납. DetectAsync 의 Preprocess 가 동기로 텐서에
+                        // 복사를 끝낸 뒤이므로 더 이상 참조되지 않는다(Gen2 스파이크 회피).
+                        frame.Dispose();
+                    }
                 }
             }
             catch (OperationCanceledException)

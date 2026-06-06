@@ -254,9 +254,16 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     ffmpeg.sws_scale(_swsCtx, frame->data, frame->linesize, 0, h, dstData, dstLinesize);
                 }
 
-                byte[] managed = new byte[_dstBufSize];
+                // 추론용 managed 복사: ArrayPool 로 빌려 프레임당 LOH 할당(Gen2 스파이크) 회피.
+                // RtspFrame.Dispose(소비자 측) 가 풀로 반납한다.
+                byte[] managed = ArrayPool<byte>.Shared.Rent(_dstBufSize);
                 Marshal.Copy(buffer, managed, 0, _dstBufSize);
-                _inferenceWriter.TryWrite(new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds));
+                var inferenceFrame = new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds, pooledBgr: true);
+                if (!_inferenceWriter.TryWrite(inferenceFrame))
+                {
+                    // 채널이 받지 않으면(가득 참/닫힘) 빌린 버퍼를 즉시 반납.
+                    inferenceFrame.Dispose();
+                }
             }
             finally
             {
@@ -352,10 +359,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
 
             // 추론용 managed 복사는 이벤트 raise 보다 먼저 한다.
             // raise 안에서 핸들러가 동기로 displayBuffer 를 해제할 수 있어 use-after-free 위험이 있음.
+            // ArrayPool 로 빌려 프레임당 LOH 할당(Gen2 스파이크) 회피. 소비자 측 RtspFrame.Dispose 가 반납.
             byte[]? managedForInference = null;
             if (_settings.ReaderFramesEnabled)
             {
-                managedForInference = new byte[_dstBufSize];
+                managedForInference = ArrayPool<byte>.Shared.Rent(_dstBufSize);
                 Marshal.Copy(displayBuffer, managedForInference, 0, _dstBufSize);
             }
 
@@ -370,7 +378,12 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
 
                 if (managedForInference != null)
                 {
-                    _inferenceWriter.TryWrite(new RtspFrame(managedForInference, w, h, capturedAt, ptsSeconds));
+                    var inferenceFrame = new RtspFrame(managedForInference, w, h, capturedAt, ptsSeconds, pooledBgr: true);
+                    if (!_inferenceWriter.TryWrite(inferenceFrame))
+                    {
+                        // 채널이 받지 않으면(가득 참/닫힘) 빌린 버퍼를 즉시 반납.
+                        inferenceFrame.Dispose();
+                    }
                 }
             }
             finally
