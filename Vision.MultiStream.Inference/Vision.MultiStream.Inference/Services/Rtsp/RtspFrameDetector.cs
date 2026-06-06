@@ -30,16 +30,25 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 LetterboxResult lb = YoloPreprocessor.Preprocess(bgrPixels, width, height);
                 swPreprocess.Stop();
 
-                var (detections, inferenceMs, postprocessMs) = _engine.Detect(lb, cancellationToken);
-
-                var timings = new InferenceTimings
+                try
                 {
-                    PreprocessMs = swPreprocess.Elapsed.TotalMilliseconds,
-                    InferenceMs = inferenceMs,
-                    PostprocessMs = postprocessMs,
-                };
+                    var (detections, inferenceMs, postprocessMs) = _engine.Detect(lb, cancellationToken);
 
-                return (detections, timings);
+                    var timings = new InferenceTimings
+                    {
+                        PreprocessMs = swPreprocess.Elapsed.TotalMilliseconds,
+                        InferenceMs = inferenceMs,
+                        PostprocessMs = postprocessMs,
+                    };
+
+                    return (detections, timings);
+                }
+                finally
+                {
+                    // 텐서 백킹(풀 버퍼)을 ArrayPool 로 반납. _engine.Detect 는 동기로
+                    // _session.Run 까지 끝낸 뒤이므로 입력 메모리를 더 참조하지 않는다.
+                    lb.Dispose();
+                }
             }, cancellationToken);
         }
     }
