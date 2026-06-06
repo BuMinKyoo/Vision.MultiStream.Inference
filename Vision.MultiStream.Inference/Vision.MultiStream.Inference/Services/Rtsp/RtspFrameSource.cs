@@ -53,10 +53,14 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         public RtspFrameSource(string rtspUrl)
         {
             _url = rtspUrl;
+            // 용량 1, "최신 프레임 우선". DropOldest 는 밀려난 프레임을 Dispose 없이 버려서
+            // 추론용 풀 버퍼(ArrayPool)가 반납되지 않고 LOH/Gen2 로 새는 문제가 있다.
+            // → Wait 로 두고 PublishInferenceFrame 에서 직접 evict + Dispose(풀 반납) 한다.
+            // 생산자도 evict 를 위해 TryRead 하므로 SingleReader=false.
             _channel = Channel.CreateBounded<RtspFrame>(new BoundedChannelOptions(1)
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = false,
                 SingleWriter = true
             });
         }
@@ -172,7 +176,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                 videoRenderer = new VideoRenderer(
                     videoFrameQueue, info.VideoTimeBase, _clock, _settings,
-                    _channel.Writer, RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
+                    PublishInferenceFrame, RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
 
                 BlockingCollection<IntPtr>? audioPacketQueue = null;
                 BlockingCollection<AudioFrame>? audioFrameQueue = null;
@@ -306,6 +310,28 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
             _cts?.Dispose();
             _cts = null;
+        }
+
+        // VideoRenderer(단일 생산자)가 추론용 최신 프레임을 발행한다.
+        // 채널 용량 1: 아직 소비되지 않은 이전 프레임이 남아 있으면 그것을 꺼내 Dispose(풀 버퍼 반납)한 뒤
+        // 새 프레임을 넣는다. "최신 우선" 의미는 유지하되, 밀려난 프레임의 ArrayPool 버퍼가 새지 않게 한다.
+        private void PublishInferenceFrame(RtspFrame frame)
+        {
+            while (!_channel.Writer.TryWrite(frame))
+            {
+                if (_channel.Reader.TryRead(out RtspFrame? stale))
+                {
+                    // 큐에 남아 있던(미소비) 이전 프레임 반납 후 재시도.
+                    // 소비자가 가져간 프레임은 소비자 쪽 finally 에서 Dispose 되므로 여기선 건드리지 않는다.
+                    stale.Dispose();
+                    continue;
+                }
+
+                // 쓰지도 비우지도 못함 → 채널이 닫혔거나(정지 중) 소비자가 막 비운 순간.
+                // 새 프레임을 직접 반납하고 종료(누수 방지).
+                frame.Dispose();
+                return;
+            }
         }
 
         // VideoRenderer 가 호출. 구독자가 있으면 프레임을 넘긴 것으로 보고 true 반환

@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Channels;
 using FFmpeg.AutoGen;
 using Vision.MultiStream.Inference.Common;
 
@@ -50,7 +49,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private readonly AVRational _timeBase;
         private readonly MediaClock _clock;
         private readonly VideoRenderSettings _settings;
-        private readonly ChannelWriter<RtspFrame> _inferenceWriter;
+        // 추론용 최신 프레임 발행(밀려난 프레임 Dispose+풀 반납은 RtspFrameSource 가 담당).
+        private readonly Action<RtspFrame> _publishInference;
         private readonly Func<RtspFrame, bool> _raiseFrameCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvIndividualCaptured;
@@ -68,7 +68,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             AVRational timeBase,
             MediaClock clock,
             VideoRenderSettings settings,
-            ChannelWriter<RtspFrame> inferenceWriter,
+            Action<RtspFrame> publishInference,
             Func<RtspFrame, bool> raiseFrameCaptured,
             Action<RtspYuvFrame> raiseYuvCaptured,
             Action<RtspYuvFrame> raiseYuvIndividualCaptured,
@@ -79,7 +79,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             _timeBase = timeBase;
             _clock = clock;
             _settings = settings;
-            _inferenceWriter = inferenceWriter;
+            _publishInference = publishInference;
             _raiseFrameCaptured = raiseFrameCaptured;
             _raiseYuvCaptured = raiseYuvCaptured;
             _raiseYuvIndividualCaptured = raiseYuvIndividualCaptured;
@@ -258,12 +258,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                 // RtspFrame.Dispose(소비자 측) 가 풀로 반납한다.
                 byte[] managed = ArrayPool<byte>.Shared.Rent(_dstBufSize);
                 Marshal.Copy(buffer, managed, 0, _dstBufSize);
-                var inferenceFrame = new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds, pooledBgr: true);
-                if (!_inferenceWriter.TryWrite(inferenceFrame))
-                {
-                    // 채널이 받지 않으면(가득 참/닫힘) 빌린 버퍼를 즉시 반납.
-                    inferenceFrame.Dispose();
-                }
+                // 발행은 RtspFrameSource 가 처리: 밀려난(미소비) 이전 프레임을 Dispose 해 풀 버퍼를 반납한다.
+                _publishInference(new RtspFrame(managed, w, h, DateTime.UtcNow, ptsSeconds, pooledBgr: true));
             }
             finally
             {
@@ -378,12 +374,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
 
                 if (managedForInference != null)
                 {
-                    var inferenceFrame = new RtspFrame(managedForInference, w, h, capturedAt, ptsSeconds, pooledBgr: true);
-                    if (!_inferenceWriter.TryWrite(inferenceFrame))
-                    {
-                        // 채널이 받지 않으면(가득 참/닫힘) 빌린 버퍼를 즉시 반납.
-                        inferenceFrame.Dispose();
-                    }
+                    // 발행은 RtspFrameSource 가 처리: 밀려난(미소비) 이전 프레임을 Dispose 해 풀 버퍼를 반납한다.
+                    _publishInference(new RtspFrame(managedForInference, w, h, capturedAt, ptsSeconds, pooledBgr: true));
                 }
             }
             finally
