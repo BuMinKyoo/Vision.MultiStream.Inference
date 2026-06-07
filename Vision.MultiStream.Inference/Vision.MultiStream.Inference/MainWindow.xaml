@@ -246,6 +246,13 @@
                             <ComboBox Width="120" Margin="6,0,0,0"
                                       ItemsSource="{Binding Source={StaticResource LayoutModes}}"
                                       SelectedItem="{Binding Layout}"/>
+                            <TextBlock Text="VLM 묘사:" VerticalAlignment="Center" Margin="24,0,0,0"/>
+                            <RadioButton Content="GPU" GroupName="VlmDevice" Margin="6,0,0,0" VerticalAlignment="Center"
+                                         IsChecked="{Binding VlmUseGpu}"
+                                         ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
+                            <RadioButton Content="CPU" GroupName="VlmDevice" Margin="8,0,0,0" VerticalAlignment="Center"
+                                         IsChecked="{Binding VlmUseCpu}"
+                                         ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
                         </StackPanel>
                     </Border>
 
@@ -360,9 +367,31 @@
                                             </DockPanel>
                                         </Border>
 
-                                        <!-- 하단 바: FPS (1줄) + 타이밍 (2줄) -->
-                                        <Border VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
-                                                Background="#B0000000" Padding="6,3" Margin="4">
+                                        <!-- 하단 영역: [VLM 장면 자막] 위에 [통계 바]를 세로로 쌓는다(겹침 방지). -->
+                                        <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Orientation="Vertical">
+
+                                        <!-- [Step 7] VLM 장면 묘사 자막. 사람 검출 시에만 채워지며, 비어 있으면 숨긴다. -->
+                                        <Border Background="#C8203040" Padding="6,3" Margin="4,0,4,2">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SceneDescription}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Foreground="#FFD479" FontSize="11" TextWrapping="Wrap"
+                                                       ToolTip="{Binding SceneDescription}">
+                                                <Run Text="💬"/>
+                                                <Run Text="{Binding SceneDescription, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </Border>
+
+                                        <!-- 통계 바: FPS (1줄) + 타이밍 (2줄) -->
+                                        <Border HorizontalAlignment="Stretch"
+                                                Background="#B0000000" Padding="6,3" Margin="4,0,4,4">
                                             <StackPanel Orientation="Vertical">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Foreground="LightGreen">
@@ -396,6 +425,7 @@
                                                 </TextBlock>
                                             </StackPanel>
                                         </Border>
+                                        </StackPanel>
 
                                         <!-- 비활성 상태 안내 -->
                                         <TextBlock Text="정지됨 — 🎥 또는 🔊 클릭" Foreground="#888" FontSize="14"

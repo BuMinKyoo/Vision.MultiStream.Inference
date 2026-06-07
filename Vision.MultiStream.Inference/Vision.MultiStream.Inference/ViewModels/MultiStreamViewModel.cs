@@ -6,6 +6,7 @@ using System.Windows;
 using Vision.MultiStream.Inference.Common;
 using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Rtsp;
+using Vision.MultiStream.Inference.Services.Vlm;
 using Vision.MultiStream.Inference.Services.Yolo;
 using Vision.MultiStream.Inference.Views;
 
@@ -319,6 +320,35 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (value)
                 {
                     NewRenderMode = StreamRenderMode.GpuCompositor;
+                }
+            }
+        }
+
+        // [Step 7] VLM 묘사 디바이스 전역 토글(GPU/CPU). Ollama 단일 모델 로드라 앱 공통.
+        // 라디오 버튼 2개(GPU/CPU)에 바인딩. 전환은 다음 VLM 호출부터 적용(모델 재로딩 ~1분 발생 가능).
+        public bool VlmUseGpu
+        {
+            get => OllamaVlmClient.UseGpu;
+            set
+            {
+                if (OllamaVlmClient.UseGpu == value)
+                {
+                    return;
+                }
+                OllamaVlmClient.UseGpu = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(VlmUseCpu));
+            }
+        }
+
+        public bool VlmUseCpu
+        {
+            get => !OllamaVlmClient.UseGpu;
+            set
+            {
+                if (value)
+                {
+                    VlmUseGpu = false;
                 }
             }
         }

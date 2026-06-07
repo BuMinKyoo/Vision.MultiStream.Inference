@@ -14,6 +14,7 @@ using Vision.MultiStream.Inference.Models;
 using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Audio;
 using Vision.MultiStream.Inference.Services.Rtsp;
+using Vision.MultiStream.Inference.Services.Vlm;
 using Vision.MultiStream.Inference.Services.Yolo;
 
 namespace Vision.MultiStream.Inference.ViewModels
@@ -34,6 +35,17 @@ namespace Vision.MultiStream.Inference.ViewModels
     public sealed class StreamItemViewModel : BaseViewModel, IDisposable
     {
         private const int DisplayFrameQueueCapacity = 1;
+
+        // [Step 7] 사람 검출 시 로컬 VLM(Ollama LLaVA)으로 장면을 묘사. COCO 'person' = 0.
+        // [진단 임시] VLM 파이프라인 전체 on/off. false 면 서비스 미시작 + 트리거 미발화(HTTP/CPU 부하 0).
+        // CPU 전용 VLM 이 멈춤의 범인인지 격리 확인용.
+        private static readonly bool VlmEnabled = true;
+        private const int PersonClassId = 0;
+        private static readonly TimeSpan VlmCooldown = TimeSpan.FromSeconds(30);
+        private const string VlmModel = "qwen2.5vl:7b";
+        // qwen2.5vl 은 한국어로 "한국어로 답하라"고 하면 영어로 답해버린다. 영어 메타 지시로 한국어 출력을
+        // 강제하는 편이 안정적이다(실측 확인). 사람 행동에 초점을 맞춰 한 문장으로 묘사.
+        private const string VlmPrompt = "Describe what the people in this image are doing, in one short sentence. You MUST answer ONLY in Korean (한국어로만 답하시오). Do not use any English.";
 
         private readonly Func<InferenceDevice, IRtspFrameDetector> _detectorResolver;
         private readonly Action<StreamItemViewModel> _onRemoveRequested;
@@ -66,6 +78,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private double _preprocessMs;
         private double _inferenceMs;
         private double _postprocessMs;
+        private string _sceneDescription = string.Empty;
+        private DateTime _sceneDescribedAt;
         private int _audioBufferedMs;
         private int _audioBufferLengthMs;
         private double _audioFillRatio;
@@ -77,6 +91,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private IAudioOutput? _audioOutput;
         private CancellationTokenSource? _inferenceCts;
         private Task? _inferenceTask;
+        private VlmDescriptionService? _vlmService;
         private DispatcherTimer? _audioDiagTimer;
 
         private readonly FpsCounter _displayFpsCounter = new();
@@ -129,6 +144,36 @@ namespace Vision.MultiStream.Inference.ViewModels
         }
 
         public ObservableCollection<Detection> Detections { get; } = new();
+
+        /// <summary>[Step 7] 사람 검출 시 VLM 이 생성한 최근 장면 묘사 텍스트.</summary>
+        public string SceneDescription
+        {
+            get => _sceneDescription;
+            private set
+            {
+                if (_sceneDescription == value)
+                {
+                    return;
+                }
+                _sceneDescription = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>장면 묘사가 갱신된 시각.</summary>
+        public DateTime SceneDescribedAt
+        {
+            get => _sceneDescribedAt;
+            private set
+            {
+                if (_sceneDescribedAt == value)
+                {
+                    return;
+                }
+                _sceneDescribedAt = value;
+                OnPropertyChanged();
+            }
+        }
 
         public RelayCommand ToggleVideoCommand { get; }
         public RelayCommand ToggleAudioCommand { get; }
@@ -688,9 +733,57 @@ namespace Vision.MultiStream.Inference.ViewModels
             {
                 _source.ReaderFramesEnabled = true;
             }
+            StartVlmService();
             _inferenceCts = new CancellationTokenSource();
             CancellationToken token = _inferenceCts.Token;
             _inferenceTask = Task.Run(() => InferenceLoopAsync(token));
+        }
+
+        // [Step 7] VLM 묘사 파이프라인을 스트림당 1개 띄운다. 묘사/오류 콜백은 UI 스레드로 마샬링.
+        private void StartVlmService()
+        {
+            if (!VlmEnabled)
+            {
+                return;
+            }
+            if (_vlmService != null)
+            {
+                return;
+            }
+            var service = new VlmDescriptionService(new OllamaVlmClient(model: VlmModel), VlmCooldown, VlmPrompt);
+            // [진단] 각 단계를 하단 자막에 그대로 노출 → 트리거/호출/응답 중 어디서 막히는지 화면에서 확인.
+            service.RequestQueued += () =>
+            {
+                // 이미 받은 묘사는 덮어쓰지 않고 유지(분석은 ~20s 걸림). 첫 분석/대기 상태일 때만 표시.
+                _ = _dispatcher.BeginInvoke(() =>
+                {
+                    if (SceneDescribedAt == default)
+                    {
+                        SceneDescription = "🧠 장면 분석 중...";
+                    }
+                }, DispatcherPriority.Background);
+            };
+            service.DescriptionReady += description =>
+            {
+                _ = _dispatcher.BeginInvoke(() =>
+                {
+                    SceneDescription = description;
+                    SceneDescribedAt = DateTime.Now;
+                }, DispatcherPriority.Background);
+            };
+            service.ErrorOccurred += message =>
+            {
+                _ = _dispatcher.BeginInvoke(() => SceneDescription = $"⚠️ VLM 오류: {message}", DispatcherPriority.Background);
+            };
+            _vlmService = service;
+            // [진단 임시] 추론 시작 시 즉시 표시 → 배선/표시 경로가 살아있는지 화면에서 확인(사람 검출 전에도 보임).
+            _ = _dispatcher.BeginInvoke(() => SceneDescription = "🟢 VLM 대기 중 (사람 검출 시 분석)", DispatcherPriority.Background);
+        }
+
+        private void StopVlmService()
+        {
+            _vlmService?.Dispose();
+            _vlmService = null;
         }
 
         // 추론 루프만 정지. RTSP / 디코더는 건드리지 않는다.
@@ -710,6 +803,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             _inferenceTask = null;
             _inferenceCts?.Dispose();
             _inferenceCts = null;
+            StopVlmService();
         }
 
         private void TearDownSource()
@@ -1067,6 +1161,24 @@ namespace Vision.MultiStream.Inference.ViewModels
                             InferenceMs = timings.InferenceMs;
                             PostprocessMs = timings.PostprocessMs;
                         }, DispatcherPriority.Background);
+
+                        // [Step 7] 사람이 검출된 프레임만 VLM 으로 트리거(논블로킹, 게이트가 쿨다운 적용).
+                        // frame.Dispose() 전이라 BgrPixels 가 유효하며, TryTrigger 가 즉시 스냅샷을 복사한다.
+                        if (VlmEnabled && _vlmService != null)
+                        {
+                            int personCount = 0;
+                            foreach (Detection d in detections)
+                            {
+                                if (d.ClassId == PersonClassId)
+                                {
+                                    personCount++;
+                                }
+                            }
+                            if (personCount > 0)
+                            {
+                                _vlmService.TryTrigger(frame.BgrPixels, frame.Width, frame.Height, personCount);
+                            }
+                        }
                     }
                     finally
                     {
