@@ -93,47 +93,51 @@
                                     <TextBox  Grid.Row="1" Grid.Column="1"
                                               Text="{Binding NewRtspUrl, UpdateSourceTrigger=PropertyChanged}"/>
                                 </Grid>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                    <TextBlock Text="추론:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <RadioButton Content="CPU" IsChecked="{Binding NewUseCpu}" GroupName="NewDevice"
-                                                 VerticalAlignment="Center"/>
-                                    <RadioButton Content="DML" IsChecked="{Binding NewUseDirectML}" GroupName="NewDevice" Margin="8,0,0,0"
-                                                 VerticalAlignment="Center"/>
-                                    <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,0"
-                                                 VerticalAlignment="Center"/>
-                                    <RadioButton Content="GPU(C++)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,0"
-                                                 VerticalAlignment="Center"/>
-                                    <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,0"
-                                              VerticalAlignment="Center"
-                                              ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <!-- 표시(영상) 행: 좁아지면 아래로 wrap -->
+                                <WrapPanel Margin="0,6,0,0">
                                     <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <RadioButton Content="CPU+개별" IsChecked="{Binding NewModeCpuIndividual}" GroupName="NewRenderMode"
-                                                 VerticalAlignment="Center"
+                                                 VerticalAlignment="Center" Margin="0,0,0,2"
                                                  ToolTip="SW 디코딩 + per-stream 개별 표시"/>
-                                    <RadioButton Content="CPU+컴포지터" IsChecked="{Binding NewModeCpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,0"
+                                    <RadioButton Content="CPU+컴포지터" IsChecked="{Binding NewModeCpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,2"
                                                  VerticalAlignment="Center"
                                                  IsEnabled="{Binding IsCompositorAvailable}"
                                                  ToolTip="SW 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
-                                    <RadioButton Content="GPU+컴포지터" IsChecked="{Binding NewModeGpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,0"
+                                    <RadioButton Content="GPU+컴포지터" IsChecked="{Binding NewModeGpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,2"
                                                  VerticalAlignment="Center"
                                                  IsEnabled="{Binding IsCompositorAvailable}"
                                                  ToolTip="HW(D3D11VA) 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                </WrapPanel>
+                                <!-- 추론 행: 좁아지면 아래로 wrap -->
+                                <WrapPanel Margin="0,6,0,0">
+                                    <TextBlock Text="추론:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="CPU" IsChecked="{Binding NewUseCpu}" GroupName="NewDevice"
+                                                 VerticalAlignment="Center" Margin="0,0,0,2"/>
+                                    <RadioButton Content="DML" IsChecked="{Binding NewUseDirectML}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 VerticalAlignment="Center"/>
+                                    <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 VerticalAlignment="Center"/>
+                                    <RadioButton Content="GPU(C++)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 VerticalAlignment="Center"/>
+                                    <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,2"
+                                              VerticalAlignment="Center"
+                                              ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
+                                </WrapPanel>
+                                <!-- VLM 묘사 행: 좁아지면 아래로 wrap -->
+                                <WrapPanel Margin="0,6,0,0">
                                     <TextBlock Text="VLM 묘사:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <RadioButton Content="CPU" GroupName="VlmDevice" VerticalAlignment="Center"
+                                    <RadioButton Content="CPU" GroupName="VlmDevice" VerticalAlignment="Center" Margin="0,0,0,2"
                                                  IsChecked="{Binding VlmUseCpu}"
                                                  ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
-                                    <RadioButton Content="GPU" GroupName="VlmDevice" Margin="8,0,0,0" VerticalAlignment="Center"
+                                    <RadioButton Content="GPU" GroupName="VlmDevice" Margin="8,0,0,2" VerticalAlignment="Center"
                                                  IsChecked="{Binding VlmUseGpu}"
                                                  ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                    <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28"/>
-                                    <Button Content="📋 일괄 추가" Command="{Binding AddBulkCommand}" Width="110" Height="28" Margin="6,0,0,0"/>
-                                </StackPanel>
+                                </WrapPanel>
+                                <!-- 버튼 행: 좁아지면 아래로 wrap -->
+                                <WrapPanel Margin="0,6,0,0">
+                                    <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28" Margin="0,0,0,2"/>
+                                    <Button Content="📋 일괄 추가" Command="{Binding AddBulkCommand}" Width="110" Height="28" Margin="6,0,0,2"/>
+                                </WrapPanel>
                             </StackPanel>
                         </Border>
 
