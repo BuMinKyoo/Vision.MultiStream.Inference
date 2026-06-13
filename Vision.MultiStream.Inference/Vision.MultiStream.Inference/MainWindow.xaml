@@ -120,6 +120,15 @@
                                                  ToolTip="HW(D3D11VA) 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <TextBlock Text="VLM 묘사:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="GPU" GroupName="VlmDevice" VerticalAlignment="Center"
+                                                 IsChecked="{Binding VlmUseGpu}"
+                                                 ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
+                                    <RadioButton Content="CPU" GroupName="VlmDevice" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                 IsChecked="{Binding VlmUseCpu}"
+                                                 ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                     <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28"/>
                                     <Button Content="📋 일괄 추가" Command="{Binding AddBulkCommand}" Width="110" Height="28" Margin="6,0,0,0"/>
                                 </StackPanel>
@@ -246,13 +255,6 @@
                             <ComboBox Width="120" Margin="6,0,0,0"
                                       ItemsSource="{Binding Source={StaticResource LayoutModes}}"
                                       SelectedItem="{Binding Layout}"/>
-                            <TextBlock Text="VLM 묘사:" VerticalAlignment="Center" Margin="24,0,0,0"/>
-                            <RadioButton Content="GPU" GroupName="VlmDevice" Margin="6,0,0,0" VerticalAlignment="Center"
-                                         IsChecked="{Binding VlmUseGpu}"
-                                         ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
-                            <RadioButton Content="CPU" GroupName="VlmDevice" Margin="8,0,0,0" VerticalAlignment="Center"
-                                         IsChecked="{Binding VlmUseCpu}"
-                                         ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
                         </StackPanel>
                     </Border>
 
