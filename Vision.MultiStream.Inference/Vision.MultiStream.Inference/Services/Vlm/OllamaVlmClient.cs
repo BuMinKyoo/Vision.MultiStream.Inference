@@ -27,7 +27,7 @@ namespace Vision.MultiStream.Inference.Services.Vlm
         /// true = GPU(Ollama 가 VRAM 에 맞게 자동 오프로드), false = CPU 전용(num_gpu=0).
         /// 전환 시 다음 호출에서 Ollama 가 모델을 재로딩한다(콜드 ~1분).
         /// </summary>
-        public static bool UseGpu { get; set; } = true;
+        public static bool UseGpu { get; set; } = false;
 
         private readonly string _endpoint;
         private readonly string _model;
