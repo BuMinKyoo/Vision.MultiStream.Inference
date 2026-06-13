@@ -1,0 +1,23 @@
+# === .NET / Visual Studio 빌드 산출물 ===
+[Bb]in/
+[Oo]bj/
+.vs/
+
+# === 네이티브 C++ 프로젝트(Vision.MultiStream.Native) 빌드 산출물 ===
+# 주의: Vision.MultiStream.Inference/Native/win-x64/*.dll 은 FFmpeg 자산(커밋 대상)이므로
+#       무시 규칙은 네이티브 프로젝트 경로(Native/Vision.MultiStream.Native/) 로만 한정한다.
+#
+# 출력/중간 폴더: vcxproj OutDir/IntDir = x64\<Config>\, VS IDE 중간 폴더 = Vision.M.<guid>\
+Native/Vision.MultiStream.Native/x64/
+Native/Vision.MultiStream.Native/Vision.M.*/
+# 컴파일/링크 부산물 (위 폴더 밖으로 떨어지는 경우 대비)
+Native/Vision.MultiStream.Native/**/*.obj
+Native/Vision.MultiStream.Native/**/*.pdb
+Native/Vision.MultiStream.Native/**/*.ilk
+Native/Vision.MultiStream.Native/**/*.idb
+Native/Vision.MultiStream.Native/**/*.exp
+Native/Vision.MultiStream.Native/**/*.lib
+Native/Vision.MultiStream.Native/**/*.dll
+Native/Vision.MultiStream.Native/**/*.recipe
+Native/Vision.MultiStream.Native/**/*.tlog
+Native/Vision.MultiStream.Native/**/*.lastbuildstate

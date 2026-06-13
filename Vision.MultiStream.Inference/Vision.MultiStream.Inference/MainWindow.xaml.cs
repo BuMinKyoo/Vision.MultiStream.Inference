@@ -17,6 +17,7 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _cpuEngine;
         private readonly YoloInferenceEngine? _dmlEngine;
         private readonly YoloInferenceEngine? _gpuEngine;
+        private readonly NativeYoloEngine? _nativeEngine; // Phase 3 GPU(C++)
         private SnapshotViewModel? _snapshotVm;
         private MultiStreamViewModel? _multiStreamVm;
         private PerformanceViewModel? _performanceVm;
@@ -70,6 +71,7 @@ namespace Vision.MultiStream.Inference
                 _cpuEngine = new YoloInferenceEngine(modelPath, InferenceDevice.Cpu);
                 _dmlEngine = TryCreateEngine(modelPath, InferenceDevice.DirectML, "DirectML");
                 _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
+                _nativeEngine = TryCreateNativeEngine(modelPath);
 
                 var snapshotDetector = new SnapshotDetector(_cpuEngine);
 
@@ -77,9 +79,11 @@ namespace Vision.MultiStream.Inference
                 IRtspFrameDetector cpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_cpuEngine));
                 IRtspFrameDetector dmlRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_dmlEngine ?? _cpuEngine));
                 IRtspFrameDetector gpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_gpuEngine ?? _cpuEngine));
+                // GPU(C++): 네이티브 엔진 초기화 실패 시 CPU 로 폴백
+                IRtspFrameDetector nativeRtspDetector = new SerializedFrameDetector(new RtspFrameDetector((IYoloEngine?)_nativeEngine ?? _cpuEngine));
 
                 _snapshotVm = new SnapshotViewModel(snapshotDetector);
-                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector);
+                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector);
                 _performanceVm = new PerformanceViewModel();
 
                 DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _performanceVm);
@@ -92,6 +96,7 @@ namespace Vision.MultiStream.Inference
                     _cpuEngine?.Dispose();
                     _dmlEngine?.Dispose();
                     _gpuEngine?.Dispose();
+                    _nativeEngine?.Dispose();
                 };
             }
             catch (Exception ex)
@@ -115,6 +120,24 @@ namespace Vision.MultiStream.Inference
                 MessageBox.Show(
                     $"{label} 초기화 실패 - 해당 옵션은 CPU로 폴백됩니다.\n\n{ex.Message}",
                     $"{label} 경고",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return null;
+            }
+        }
+
+        // Phase 3 GPU(C++): 네이티브 DLL(vision_infer.dll) 엔진. DLL 누락/DML 실패 시 null → CPU 폴백.
+        private NativeYoloEngine? TryCreateNativeEngine(string modelPath)
+        {
+            try
+            {
+                return new NativeYoloEngine(modelPath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"GPU(C++) 초기화 실패 - 해당 옵션은 CPU로 폴백됩니다.\n\n{ex.Message}",
+                    "GPU(C++) 경고",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
                 return null;

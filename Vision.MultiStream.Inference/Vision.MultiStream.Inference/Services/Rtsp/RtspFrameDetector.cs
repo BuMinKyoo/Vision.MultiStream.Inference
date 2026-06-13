@@ -9,13 +9,13 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 {
     /// <summary>
     /// RTSP 프레임(메모리상 BGR 픽셀)에서 객체를 검출하는 도메인 어댑터.
-    /// 외부에서 주입된 YoloInferenceEngine 을 공유.
+    /// 외부에서 주입된 추론 엔진(<see cref="IYoloEngine"/>: 관리 코드 ONNX 또는 네이티브 GPU(C++))을 공유.
     /// </summary>
     public sealed class RtspFrameDetector : IRtspFrameDetector
     {
-        private readonly YoloInferenceEngine _engine;
+        private readonly IYoloEngine _engine;
 
-        public RtspFrameDetector(YoloInferenceEngine engine)
+        public RtspFrameDetector(IYoloEngine engine)
         {
             _engine = engine;
         }

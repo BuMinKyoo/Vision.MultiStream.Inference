@@ -34,6 +34,8 @@
                              VerticalAlignment="Center"/>
                 <RadioButton x:Name="GpuRadio" Content="CUDA" GroupName="Device" Margin="8,0,0,0"
                              VerticalAlignment="Center"/>
+                <RadioButton x:Name="NativeCppRadio" Content="GPU(C++)" GroupName="Device" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
                 <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
                           Margin="16,0,0,0" VerticalAlignment="Center"
                           ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>

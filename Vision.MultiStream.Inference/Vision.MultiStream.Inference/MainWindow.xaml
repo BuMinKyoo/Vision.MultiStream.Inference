@@ -101,6 +101,8 @@
                                                  VerticalAlignment="Center"/>
                                     <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,0"
                                                  VerticalAlignment="Center"/>
+                                    <RadioButton Content="GPU(C++)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,0"
+                                                 VerticalAlignment="Center"/>
                                     <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,0"
                                               VerticalAlignment="Center"
                                               ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>

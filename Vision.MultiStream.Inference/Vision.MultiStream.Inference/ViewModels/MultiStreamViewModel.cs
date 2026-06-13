@@ -45,12 +45,14 @@ namespace Vision.MultiStream.Inference.ViewModels
         public MultiStreamViewModel(
             IRtspFrameDetector cpuDetector,
             IRtspFrameDetector dmlDetector,
-            IRtspFrameDetector gpuDetector)
+            IRtspFrameDetector gpuDetector,
+            IRtspFrameDetector nativeDetector)
         {
             _detectorResolver = device => device switch
             {
                 InferenceDevice.DirectML => dmlDetector,
                 InferenceDevice.Gpu => gpuDetector,
+                InferenceDevice.NativeCpp => nativeDetector,
                 _ => cpuDetector
             };
 
@@ -217,6 +219,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(NewUseCpu));
                 OnPropertyChanged(nameof(NewUseDirectML));
                 OnPropertyChanged(nameof(NewUseGpu));
+                OnPropertyChanged(nameof(NewUseNativeCpp));
             }
         }
 
@@ -252,6 +255,18 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (value)
                 {
                     NewDevice = InferenceDevice.Gpu;
+                }
+            }
+        }
+
+        public bool NewUseNativeCpp
+        {
+            get => _newDevice == InferenceDevice.NativeCpp;
+            set
+            {
+                if (value)
+                {
+                    NewDevice = InferenceDevice.NativeCpp;
                 }
             }
         }

@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="Native/Vision.MultiStream.Native/Vision.MultiStream.Native.vcxproj" Id="8f3a2c71-7b4d-4e96-9c2a-1d5e6f0a9b33" />
   <Project Path="Vision.MultiStream.Inference/Vision.MultiStream.Inference.csproj" />
 </Solution>

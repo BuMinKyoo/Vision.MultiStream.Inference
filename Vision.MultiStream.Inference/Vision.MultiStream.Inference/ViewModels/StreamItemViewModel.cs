@@ -224,6 +224,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(UseCpu));
                 OnPropertyChanged(nameof(UseDirectML));
                 OnPropertyChanged(nameof(UseGpu));
+                OnPropertyChanged(nameof(UseNativeCpp));
                 OnPropertyChanged(nameof(DeviceLabel));
             }
         }
@@ -232,6 +233,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             InferenceDevice.DirectML => "DML",
             InferenceDevice.Gpu => "CUDA",
+            InferenceDevice.NativeCpp => "C++",
             _ => "CPU"
         };
 
@@ -277,6 +279,18 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (value)
                 {
                     Device = InferenceDevice.Gpu;
+                }
+            }
+        }
+
+        public bool UseNativeCpp
+        {
+            get => _device == InferenceDevice.NativeCpp;
+            set
+            {
+                if (value)
+                {
+                    Device = InferenceDevice.NativeCpp;
                 }
             }
         }

@@ -45,6 +45,10 @@ namespace Vision.MultiStream.Inference.Views
             {
                 SelectedDevice = InferenceDevice.Gpu;
             }
+            else if (NativeCppRadio.IsChecked == true)
+            {
+                SelectedDevice = InferenceDevice.NativeCpp;
+            }
             else
             {
                 SelectedDevice = InferenceDevice.Cpu;

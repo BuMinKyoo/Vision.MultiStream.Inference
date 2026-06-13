@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    Vision.MultiStream.Inference 의 네이티브 추론 DLL (Phase 3 "GPU(C++)").
+    x64 DynamicLibrary. C# WPF 프로젝트가 이 DLL(vision_infer.dll)을 P/Invoke 로 호출한다.
+    빌드 산출물은 csproj 측 빌드 타깃이 출력 폴더로 복사한다.
+  -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8F3A2C71-7B4D-4E96-9C2A-1D5E6F0A9B33}</ProjectGuid>
+    <RootNamespace>VisionMultiStreamNative</RootNamespace>
+    <!-- 출력 DLL 이름을 vision_infer.dll 로 고정 (DllImport 의 라이브러리 이름) -->
+    <TargetName>vision_infer</TargetName>
+    <PlatformToolset>v145</PlatformToolset>
+    <!-- generic '10.0' 토큰은 VS 에서 재타깃 프롬프트/언로드를 유발할 수 있어 설치된 SDK 로 고정 -->
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <!--
+      출력/중간 산출물을 항상 프로젝트 폴더(x64\$(Configuration)\) 아래로 고정.
+      이렇게 안 하면 솔루션 빌드 시 $(SolutionDir)x64\ 로, 단독 빌드 시 프로젝트 폴더로
+      서로 다르게 떨어져 csproj 의 CopyNativeInferDll 복사 경로와 어긋난다.
+    -->
+    <OutDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\obj\</IntDir>
+
+    <!--
+      ONNX Runtime(DirectML) 네이티브 SDK 경로. 보통 csproj 의 BuildNativeInferDll 타깃이
+      NuGet 해석 경로를 /p:OnnxRuntimeDir=... 로 넘겨준다. 단독 빌드를 위해 기본값(캐시 경로)도 둔다.
+      런타임 onnxruntime.dll / DirectML.dll 은 C# 패키지가 이미 출력 폴더에 복사하므로
+      네이티브는 import lib(onnxruntime.lib)로 링크만 하고 DLL 은 별도로 싣지 않는다.
+    -->
+    <OnnxRuntimeDir Condition="'$(OnnxRuntimeDir)'==''">$(USERPROFILE)\.nuget\packages\microsoft.ml.onnxruntime.directml\1.20.1</OnnxRuntimeDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- 소스가 UTF-8(BOM 없음)이라 MSVC 가 로컬 코드페이지로 오인(C4819). UTF-8 로 강제. -->
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <!-- 헤더가 dllexport 로 컴파일되도록 export 매크로 정의 -->
+      <PreprocessorDefinitions>VISION_INFER_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(OnnxRuntimeDir)\build\native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>onnxruntime.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OnnxRuntimeDir)\runtimes\win-x64\native;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClInclude Include="vision_infer.h" />
+    <ClCompile Include="vision_infer.cpp" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

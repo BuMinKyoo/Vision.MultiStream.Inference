@@ -14,7 +14,8 @@
 
   <ItemGroup>
     <!-- CUDA로 전환하려면 아래 항목을 주석 처리하고 Microsoft.ML.OnnxRuntime.Gpu 로 교체 -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" />
+    <!-- GeneratePathProperty: 네이티브 빌드에 ORT 헤더/lib 경로($(PkgMicrosoft_ML_OnnxRuntime_DirectML))를 넘기기 위함 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" GeneratePathProperty="true" />
 	<!--<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.16.2" />-->
 
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
@@ -47,5 +48,43 @@
       <Link>%(Filename)%(Extension)</Link>
     </None>
   </ItemGroup>
+
+  <!--
+    Phase 3 "GPU(C++)": 네이티브 추론 DLL(vision_infer.dll) 자동 빌드 + 출력 폴더 복사.
+    C++ 프로젝트는 .NET SDK(dotnet)로 빌드할 수 없으므로, vswhere 로 VS 정식 MSBuild.exe 를
+    찾아 .vcxproj 를 x64 로 Exec 빌드한 뒤 산출 DLL 을 C# 출력 폴더로 복사한다.
+    (dotnet build / Visual Studio 솔루션 빌드 양쪽 모두에서 동작)
+  -->
+  <PropertyGroup>
+    <NativeInferProj>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Native\Vision.MultiStream.Native.vcxproj</NativeInferProj>
+    <NativeInferDll>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Native\x64\$(Configuration)\vision_infer.dll</NativeInferDll>
+  </PropertyGroup>
+
+  <Target Name="BuildNativeInferDll" BeforeTargets="BeforeBuild">
+    <!--
+      vswhere 경로의 property function 은 '타깃 안'에서만 평가한다.
+      최상위 PropertyGroup 에 두면 VS 가 프로젝트를 '로드'하는 시점에 평가하다 실패해
+      프로젝트가 언로드될 수 있다. 타깃 내부는 빌드 시점에만 평가된다.
+    -->
+    <PropertyGroup>
+      <VsWhereExe>$([System.Environment]::GetEnvironmentVariable('ProgramFiles(x86)'))\Microsoft Visual Studio\Installer\vswhere.exe</VsWhereExe>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(VsWhereExe)')"
+           Text="vswhere.exe 를 찾을 수 없습니다(VS C++ 빌드 도구 필요): $(VsWhereExe)" />
+    <Exec Command="&quot;$(VsWhereExe)&quot; -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe"
+          ConsoleToMSBuild="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="VsMsBuildExe" />
+    </Exec>
+    <Error Condition="'$(VsMsBuildExe)'==''"
+           Text="VS MSBuild.exe 를 찾을 수 없습니다. Visual Studio C++ 워크로드를 설치하세요." />
+    <Message Importance="high" Text="[Phase3] 네이티브 추론 DLL 빌드: $(NativeInferProj) ($(Configuration)|x64)" />
+    <Exec Command="&quot;$(VsMsBuildExe)&quot; &quot;$(NativeInferProj)&quot; /p:Configuration=$(Configuration) /p:Platform=x64 /p:OnnxRuntimeDir=&quot;$(PkgMicrosoft_ML_OnnxRuntime_DirectML)&quot; /v:minimal /nologo" />
+  </Target>
+
+  <Target Name="CopyNativeInferDll" AfterTargets="Build" DependsOnTargets="BuildNativeInferDll">
+    <Error Condition="!Exists('$(NativeInferDll)')"
+           Text="네이티브 DLL 이 생성되지 않았습니다: $(NativeInferDll)" />
+    <Copy SourceFiles="$(NativeInferDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
