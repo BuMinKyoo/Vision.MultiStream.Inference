@@ -16,7 +16,7 @@
     <!-- CUDA로 전환하려면 아래 항목을 주석 처리하고 Microsoft.ML.OnnxRuntime.Gpu 로 교체 -->
     <!-- GeneratePathProperty: 네이티브 빌드에 ORT 헤더/lib 경로($(PkgMicrosoft_ML_OnnxRuntime_DirectML))를 넘기기 위함 -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" GeneratePathProperty="true" />
-	<!--<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.16.2" />-->
+	<!--<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.20.1" />-->
 
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />

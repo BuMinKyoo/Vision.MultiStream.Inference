@@ -64,7 +64,7 @@
             <Grid Margin="8">
                 <Grid.ColumnDefinitions>
                     <!-- 좌 패널: 드래그로 폭 조절(GridSplitter). 최소/최대 폭 제한. -->
-                    <ColumnDefinition Width="360" MinWidth="240" MaxWidth="640"/>
+                    <ColumnDefinition Width="370" MinWidth="240" MaxWidth="640"/>
                     <!-- 스플리터 전용 열 -->
                     <ColumnDefinition Width="6"/>
                     <ColumnDefinition Width="*" MinWidth="320"/>
