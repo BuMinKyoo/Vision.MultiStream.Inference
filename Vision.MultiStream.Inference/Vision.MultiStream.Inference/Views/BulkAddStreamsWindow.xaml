@@ -42,6 +42,9 @@
                 <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
                           Margin="16,0,0,0" VerticalAlignment="Center"
                           ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
+                <CheckBox x:Name="VlmCheck" Content="VLM 사용" IsChecked="True"
+                          Margin="12,0,0,0" VerticalAlignment="Center"
+                          ToolTip="추가된 스트림에서 사람 검출 시 VLM 장면 묘사를 켜둘지 여부"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                 <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,8,0"/>

@@ -36,6 +36,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _newRtspUrl = "rtsp://localhost:8554/cam1";
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
         private bool _newUseInference = true;
+        private bool _newUseVlm = true;
         // 컴포지터가 없으면(GPU 없음) 기본값은 개별. AttachCompositor 시 컴포지터 모드로 올린다.
         private StreamRenderMode _newRenderMode = StreamRenderMode.CpuIndividual;
         private LayoutMode _layout = LayoutMode.Auto;
@@ -316,6 +317,21 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        // 추가될 스트림에서 VLM 묘사 파이프라인을 켜둘지 여부(스트림당). '추론 사용' 과 동일 패턴.
+        public bool NewUseVlm
+        {
+            get => _newUseVlm;
+            set
+            {
+                if (_newUseVlm == value)
+                {
+                    return;
+                }
+                _newUseVlm = value;
+                OnPropertyChanged();
+            }
+        }
+
         // 표시/디코딩 모드 선택 라디오 3종. 컴포지터 두 모드는 IsCompositorAvailable 일 때만 켤 수 있다.
         public StreamRenderMode NewRenderMode
         {
@@ -440,7 +456,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode, _newUseVlm);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -462,6 +478,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             InferenceDevice device = dialog.SelectedDevice;
             bool inferenceEnabled = dialog.SelectedInferenceEnabled;
             StreamRenderMode renderMode = dialog.SelectedRenderMode;
+            bool vlmEnabled = dialog.SelectedVlmEnabled;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -469,14 +486,14 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode, vlmEnabled));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode)
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode, bool vlmEnabled)
         {
-            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode, vlmEnabled);
             WireStream(item);
             return item;
         }

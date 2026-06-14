@@ -37,9 +37,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private const int DisplayFrameQueueCapacity = 1;
 
         // [Step 7] 사람 검출 시 로컬 VLM(Ollama LLaVA)으로 장면을 묘사. COCO 'person' = 0.
-        // [진단 임시] VLM 파이프라인 전체 on/off. false 면 서비스 미시작 + 트리거 미발화(HTTP/CPU 부하 0).
-        // CPU 전용 VLM 이 멈춤의 범인인지 격리 확인용.
-        private static readonly bool VlmEnabled = true;
+        // VLM on/off 는 스트림당 _useVlm 로 제어한다(추가 폼/일괄추가 창의 'VLM 사용' 체크박스).
         private const int PersonClassId = 0;
         private static readonly TimeSpan VlmCooldown = TimeSpan.FromSeconds(10);
         private const string VlmModel = "qwen2.5vl:3b";
@@ -68,6 +66,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private bool _isVideoEnabled;
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
+        // 스트림당 VLM 묘사 사용 여부(추가 시 결정). false 면 이 스트림은 VLM 서비스를 띄우지 않는다.
+        private readonly bool _useVlm;
         private string _statusMessage = "대기";
         private ImageSource? _imageSource;
         private WriteableBitmap? _writeableBitmap;
@@ -118,7 +118,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             Func<InferenceDevice, IRtspFrameDetector> detectorResolver,
             Action<StreamItemViewModel> onRemoveRequested,
             bool initialInferenceEnabled = true,
-            StreamRenderMode renderMode = StreamRenderMode.CpuIndividual)
+            StreamRenderMode renderMode = StreamRenderMode.CpuIndividual,
+            bool initialVlmEnabled = true)
         {
             _name = name;
             _rtspUrl = rtspUrl;
@@ -127,6 +128,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             _useHardwareDecoding = renderMode == StreamRenderMode.GpuCompositor;
             _useCompositor = renderMode != StreamRenderMode.CpuIndividual;
             _isInferenceEnabled = initialInferenceEnabled;
+            _useVlm = initialVlmEnabled;
             _detectorResolver = detectorResolver;
             _onRemoveRequested = onRemoveRequested;
             _dispatcher = Application.Current.Dispatcher;
@@ -770,14 +772,10 @@ namespace Vision.MultiStream.Inference.ViewModels
         /// <summary>
         /// [Phase 3.5] 앱 시작 시 백그라운드에서 VLM 모델을 미리 적재(워밍업)한다. best-effort —
         /// Ollama 데몬이 안 떠 있거나 모델이 없으면 조용히 무시(첫 실제 호출에서 평소대로 콜드 로딩).
-        /// VlmEnabled/VlmModel 은 실제 서비스와 동일 값을 써 같은 적재 상태를 공유한다.
+        /// VlmModel 은 실제 서비스와 동일 값을 써 같은 적재 상태를 공유한다.
         /// </summary>
         public static async Task WarmUpVlmAsync()
         {
-            if (!VlmEnabled)
-            {
-                return;
-            }
             try
             {
                 await new OllamaVlmClient(model: VlmModel).WarmUpAsync().ConfigureAwait(false);
@@ -791,7 +789,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         // [Step 7] VLM 묘사 파이프라인을 스트림당 1개 띄운다. 묘사/오류 콜백은 UI 스레드로 마샬링.
         private void StartVlmService()
         {
-            if (!VlmEnabled)
+            // 스트림당 사용 여부(_useVlm)가 꺼져 있으면 이 스트림은 VLM 서비스를 띄우지 않는다.
+            if (!_useVlm)
             {
                 return;
             }
@@ -1213,7 +1212,8 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                         // [Step 7] 사람이 검출된 프레임만 VLM 으로 트리거(논블로킹, 게이트가 쿨다운 적용).
                         // frame.Dispose() 전이라 BgrPixels 가 유효하며, TryTrigger 가 즉시 스냅샷을 복사한다.
-                        if (VlmEnabled && _vlmService != null)
+                        // _vlmService 는 _useVlm 가 켜진 스트림에서만 생성되므로(StartVlmService), null 체크가 곧 사용 여부 게이트.
+                        if (_vlmService != null)
                         {
                             int personCount = 0;
                             foreach (Detection d in detections)

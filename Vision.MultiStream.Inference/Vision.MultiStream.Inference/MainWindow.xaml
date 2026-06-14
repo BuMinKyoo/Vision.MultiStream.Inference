@@ -139,6 +139,9 @@
                                     <RadioButton Content="GPU" GroupName="VlmDevice" Margin="8,0,0,2" VerticalAlignment="Center"
                                                  IsChecked="{Binding VlmUseGpu}"
                                                  ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
+                                    <CheckBox Content="VLM 사용" IsChecked="{Binding NewUseVlm}" Margin="12,0,0,2"
+                                              VerticalAlignment="Center"
+                                              ToolTip="추가될 스트림에서 사람 검출 시 VLM 장면 묘사를 켜둘지 여부"/>
                                 </WrapPanel>
                                 <!-- 버튼 행: 좁아지면 아래로 wrap -->
                                 <WrapPanel Margin="0,6,0,0">
