@@ -114,10 +114,17 @@
                                     <RadioButton Content="CPU" IsChecked="{Binding NewUseCpu}" GroupName="NewDevice"
                                                  VerticalAlignment="Center" Margin="0,0,0,2"/>
                                     <RadioButton Content="DML" IsChecked="{Binding NewUseDirectML}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 IsEnabled="{Binding IsDirectMLAvailable}"
                                                  VerticalAlignment="Center"/>
                                     <RadioButton Content="CUDA" IsChecked="{Binding NewUseGpu}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 IsEnabled="{Binding IsCudaAvailable}"
                                                  VerticalAlignment="Center"/>
-                                    <RadioButton Content="GPU(C++)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,2"
+                                    <RadioButton Content="TensorRT" IsChecked="{Binding NewUseTensorRT}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 IsEnabled="{Binding IsTensorRTAvailable}"
+                                                 VerticalAlignment="Center"
+                                                 ToolTip="NVIDIA TensorRT EP (FP16 + 엔진 캐시). 첫 실행 시 엔진 빌드로 수십 초 소요"/>
+                                    <RadioButton Content="GPU(C++,DML)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,2"
+                                                 IsEnabled="{Binding IsNativeCppAvailable}"
                                                  VerticalAlignment="Center"/>
                                     <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,2"
                                               VerticalAlignment="Center"

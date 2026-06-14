@@ -11,6 +11,16 @@ namespace Vision.MultiStream.Inference.Views
         public BulkAddStreamsWindow()
         {
             InitializeComponent();
+
+            // 현재 빌드(UseDirectML 토글)에서 적재되지 않는 디바이스 라디오는 비활성화.
+            //   DirectML 빌드 → CUDA/TensorRT 비활성,  Gpu 빌드 → DML/NativeCpp 비활성
+#if USE_DIRECTML
+            GpuRadio.IsEnabled = false;
+            TensorRtRadio.IsEnabled = false;
+#else
+            DmlRadio.IsEnabled = false;
+            NativeCppRadio.IsEnabled = false;
+#endif
         }
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
@@ -44,6 +54,10 @@ namespace Vision.MultiStream.Inference.Views
             else if (GpuRadio.IsChecked == true)
             {
                 SelectedDevice = InferenceDevice.Gpu;
+            }
+            else if (TensorRtRadio.IsChecked == true)
+            {
+                SelectedDevice = InferenceDevice.TensorRT;
             }
             else if (NativeCppRadio.IsChecked == true)
             {

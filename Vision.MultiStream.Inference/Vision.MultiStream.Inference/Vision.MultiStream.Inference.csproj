@@ -12,11 +12,26 @@
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
+  <!--
+    ORT 실행 공급자(EP) 토글. DirectML 패키지와 Gpu(CUDA/TensorRT) 패키지는 같은 onnxruntime.dll 을
+    서로 다른 빌드로 들고 와서 한 빌드에 공존할 수 없다. 그래서 이 값 하나로 패키지 + 컴파일 심볼을 함께 전환한다.
+      true  → DirectML 패키지 + USE_DIRECTML 심볼  (사용 가능: CPU, DML, NativeCpp(C++))
+      false → Gpu 패키지                            (사용 가능: CPU, CUDA, TensorRT)
+    NativeCpp(vision_infer.dll)는 ORT+DirectML 로 빌드되므로 DirectML 구성에서만 동작 → EnableNativeInfer 도 함께 켠다.
+  -->
+  <PropertyGroup>
+    <UseDirectML>false</UseDirectML>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(UseDirectML)'=='true'">
+    <DefineConstants>$(DefineConstants);USE_DIRECTML</DefineConstants>
+    <EnableNativeInfer>true</EnableNativeInfer>
+  </PropertyGroup>
+
   <ItemGroup>
-    <!-- CUDA로 전환하려면 아래 항목을 주석 처리하고 Microsoft.ML.OnnxRuntime.Gpu 로 교체 -->
+    <!-- ORT 실행 공급자 패키지: UseDirectML 값에 따라 자동 선택 (위 PropertyGroup 참고). -->
     <!-- GeneratePathProperty: 네이티브 빌드에 ORT 헤더/lib 경로($(PkgMicrosoft_ML_OnnxRuntime_DirectML))를 넘기기 위함 -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" GeneratePathProperty="true" />
-	<!--<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.20.1" />-->
+    <PackageReference Condition="'$(UseDirectML)'=='true'" Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.20.1" GeneratePathProperty="true" />
+    <PackageReference Condition="'$(UseDirectML)'!='true'" Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.20.1" />
 
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
@@ -55,12 +70,16 @@
     찾아 .vcxproj 를 x64 로 Exec 빌드한 뒤 산출 DLL 을 C# 출력 폴더로 복사한다.
     (dotnet build / Visual Studio 솔루션 빌드 양쪽 모두에서 동작)
   -->
+  <!--
+    네이티브 DLL 은 ORT+DirectML 전제이므로 EnableNativeInfer 는 UseDirectML=true 구성에서만 자동으로 켜진다(위 PropertyGroup).
+    Gpu(CUDA) 구성에서는 EnableNativeInfer 가 비정의(=빈 값) → 아래 두 타깃이 스킵된다.
+  -->
   <PropertyGroup>
     <NativeInferProj>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Native\Vision.MultiStream.Native.vcxproj</NativeInferProj>
     <NativeInferDll>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Native\x64\$(Configuration)\vision_infer.dll</NativeInferDll>
   </PropertyGroup>
 
-  <Target Name="BuildNativeInferDll" BeforeTargets="BeforeBuild">
+  <Target Name="BuildNativeInferDll" BeforeTargets="BeforeBuild" Condition="'$(EnableNativeInfer)'=='true'">
     <!--
       vswhere 경로의 property function 은 '타깃 안'에서만 평가한다.
       최상위 PropertyGroup 에 두면 VS 가 프로젝트를 '로드'하는 시점에 평가하다 실패해
@@ -81,7 +100,7 @@
     <Exec Command="&quot;$(VsMsBuildExe)&quot; &quot;$(NativeInferProj)&quot; /p:Configuration=$(Configuration) /p:Platform=x64 /p:OnnxRuntimeDir=&quot;$(PkgMicrosoft_ML_OnnxRuntime_DirectML)&quot; /v:minimal /nologo" />
   </Target>
 
-  <Target Name="CopyNativeInferDll" AfterTargets="Build" DependsOnTargets="BuildNativeInferDll">
+  <Target Name="CopyNativeInferDll" AfterTargets="Build" DependsOnTargets="BuildNativeInferDll" Condition="'$(EnableNativeInfer)'=='true'">
     <Error Condition="!Exists('$(NativeInferDll)')"
            Text="네이티브 DLL 이 생성되지 않았습니다: $(NativeInferDll)" />
     <Copy SourceFiles="$(NativeInferDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.ML.OnnxRuntime;
@@ -17,7 +18,8 @@ namespace Vision.MultiStream.Inference.Services.Yolo
     /// 출력 텐서: [1, 84, 8400] = (cx, cy, w, h, class0..class79) × 8400 후보.
     /// </summary>
     // NativeCpp: Phase 3 "GPU(C++)" — 네이티브 DLL(vision_infer.dll) + DirectML 로 추론.
-    public enum InferenceDevice { Cpu, DirectML, Gpu, NativeCpp }
+    // TensorRT: Phase 3.5 — ORT TensorRT EP(NVIDIA 전용, FP16 + 엔진 캐시).
+    public enum InferenceDevice { Cpu, DirectML, Gpu, NativeCpp, TensorRT }
 
     public sealed class YoloInferenceEngine : IYoloEngine, IDisposable
     {
@@ -50,8 +52,11 @@ namespace Vision.MultiStream.Inference.Services.Yolo
             Device = device;
             var options = new SessionOptions();
 
+            // DML EP(AppendExecutionProvider_DML)는 DirectML 패키지에만, CUDA/TensorRT EP 는 Gpu 패키지에만
+            // 존재한다. 두 패키지는 공존 불가하므로 USE_DIRECTML 심볼로 컴파일 단계에서 한쪽만 살린다.
             if (device == InferenceDevice.DirectML)
             {
+#if USE_DIRECTML
                 try
                 {
                     // DirectML: Windows 내장 DirectX 12 ML API 사용 (CUDA Toolkit 불필요)
@@ -62,18 +67,62 @@ namespace Vision.MultiStream.Inference.Services.Yolo
                 {
                     throw new InvalidOperationException($"DirectML 초기화 실패: {ex.Message}", ex);
                 }
+#else
+                throw new InvalidOperationException(
+                    "DirectML 은 현재 Gpu(CUDA/TensorRT) 빌드에서 비활성화되었습니다. " +
+                    "csproj 의 UseDirectML 을 true 로 바꿔 DirectML 빌드로 전환하세요.");
+#endif
             }
             else if (device == InferenceDevice.Gpu)
             {
+#if USE_DIRECTML
+                throw new InvalidOperationException(
+                    "CUDA 는 현재 DirectML 빌드에서 비활성화되었습니다. " +
+                    "csproj 의 UseDirectML 을 false 로 바꿔 Gpu 빌드로 전환하세요.");
+#else
                 try
                 {
-                    // CUDA: CUDA Toolkit 12.x 설치 필요
+                    // CUDA: CUDA Toolkit 12.x + cuDNN 9.x 설치 필요
                     options.AppendExecutionProvider_CUDA(0);
                 }
                 catch (Exception ex)
                 {
                     throw new InvalidOperationException($"GPU(CUDA) 초기화 실패: {ex.Message}", ex);
                 }
+#endif
+            }
+            else if (device == InferenceDevice.TensorRT)
+            {
+#if USE_DIRECTML
+                throw new InvalidOperationException(
+                    "TensorRT 는 현재 DirectML 빌드에서 비활성화되었습니다. " +
+                    "csproj 의 UseDirectML 을 false 로 바꿔 Gpu 빌드로 전환하세요.");
+#else
+                try
+                {
+                    // [Phase 3.5] TensorRT EP. 첫 세션 생성 시 ONNX → TensorRT 엔진 빌드(수십 초~1분).
+                    // trt_engine_cache_enable 로 엔진을 디스크에 캐시해 두 번째 실행부터는 빌드를 건너뛴다.
+                    // TensorRT 가 처리 못하는 노드는 CUDA EP 로 자동 폴백(권장 조합)이라 CUDA EP 도 함께 등록.
+                    string cacheDir = Path.Combine(AppContext.BaseDirectory, "trt_cache");
+                    Directory.CreateDirectory(cacheDir);
+
+                    using var trt = new OrtTensorRTProviderOptions();
+                    trt.UpdateOptions(new Dictionary<string, string>
+                    {
+                        { "device_id", "0" },
+                        { "trt_fp16_enable", "1" },           // FP16 가속(정확도 거의 동일, 속도↑)
+                        { "trt_engine_cache_enable", "1" },   // 엔진 디스크 캐시 → 재실행 시 빌드 생략
+                        { "trt_engine_cache_path", cacheDir },
+                        { "trt_timing_cache_enable", "1" },   // 빌드 타이밍 캐시도 재사용
+                    });
+                    options.AppendExecutionProvider_Tensorrt(trt);
+                    options.AppendExecutionProvider_CUDA(0);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"TensorRT 초기화 실패: {ex.Message}", ex);
+                }
+#endif
             }
 
             _session = new InferenceSession(modelPath, options);

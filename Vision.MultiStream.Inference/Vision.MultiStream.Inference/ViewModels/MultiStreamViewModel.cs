@@ -46,13 +46,15 @@ namespace Vision.MultiStream.Inference.ViewModels
             IRtspFrameDetector cpuDetector,
             IRtspFrameDetector dmlDetector,
             IRtspFrameDetector gpuDetector,
-            IRtspFrameDetector nativeDetector)
+            IRtspFrameDetector nativeDetector,
+            IRtspFrameDetector trtDetector)
         {
             _detectorResolver = device => device switch
             {
                 InferenceDevice.DirectML => dmlDetector,
                 InferenceDevice.Gpu => gpuDetector,
                 InferenceDevice.NativeCpp => nativeDetector,
+                InferenceDevice.TensorRT => trtDetector,
                 _ => cpuDetector
             };
 
@@ -220,6 +222,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(NewUseDirectML));
                 OnPropertyChanged(nameof(NewUseGpu));
                 OnPropertyChanged(nameof(NewUseNativeCpp));
+                OnPropertyChanged(nameof(NewUseTensorRT));
             }
         }
 
@@ -270,6 +273,34 @@ namespace Vision.MultiStream.Inference.ViewModels
                 }
             }
         }
+
+        public bool NewUseTensorRT
+        {
+            get => _newDevice == InferenceDevice.TensorRT;
+            set
+            {
+                if (value)
+                {
+                    NewDevice = InferenceDevice.TensorRT;
+                }
+            }
+        }
+
+        // 현재 빌드(UseDirectML 토글)에서 실제로 적재된 엔진만 라디오 IsEnabled 로 노출.
+        //   DirectML 빌드 → CPU/DML/NativeCpp 사용, CUDA/TensorRT 비활성
+        //   Gpu 빌드      → CPU/CUDA/TensorRT 사용, DML/NativeCpp 비활성
+        // 한 빌드에 양쪽 EP 공존이 불가하므로 컴파일 심볼로 결정한다(런타임 변동 없음 → 상수 게터).
+#if USE_DIRECTML
+        public bool IsDirectMLAvailable => true;
+        public bool IsNativeCppAvailable => true;
+        public bool IsCudaAvailable => false;
+        public bool IsTensorRTAvailable => false;
+#else
+        public bool IsDirectMLAvailable => false;
+        public bool IsNativeCppAvailable => false;
+        public bool IsCudaAvailable => true;
+        public bool IsTensorRTAvailable => true;
+#endif
 
         public bool NewUseInference
         {

@@ -17,6 +17,7 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _cpuEngine;
         private readonly YoloInferenceEngine? _dmlEngine;
         private readonly YoloInferenceEngine? _gpuEngine;
+        private readonly YoloInferenceEngine? _trtEngine;  // Phase 3.5 TensorRT
         private readonly NativeYoloEngine? _nativeEngine; // Phase 3 GPU(C++)
         private SnapshotViewModel? _snapshotVm;
         private MultiStreamViewModel? _multiStreamVm;
@@ -69,21 +70,32 @@ namespace Vision.MultiStream.Inference
             try
             {
                 _cpuEngine = new YoloInferenceEngine(modelPath, InferenceDevice.Cpu);
+                // ORT 패키지(=UseDirectML 심볼)에 맞춰 사용 가능한 엔진만 생성. 나머지는 null → 선택 시 CPU 폴백.
+#if USE_DIRECTML
                 _dmlEngine = TryCreateEngine(modelPath, InferenceDevice.DirectML, "DirectML");
-                _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
+                // Phase 3 GPU(C++): 네이티브 DLL(vision_infer.dll)은 ORT+DirectML 전제 → DirectML 구성에서만 적재.
                 _nativeEngine = TryCreateNativeEngine(modelPath);
+                _gpuEngine = null;
+                _trtEngine = null;
+#else
+                _dmlEngine = null;
+                _nativeEngine = null;
+                _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
+                _trtEngine = TryCreateEngine(modelPath, InferenceDevice.TensorRT, "TensorRT");
+#endif
 
                 var snapshotDetector = new SnapshotDetector(_cpuEngine);
 
                 // 같은 ONNX 세션을 여러 스트림이 동시에 호출하지 않도록 디바이스별로 직렬화 래핑
                 IRtspFrameDetector cpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_cpuEngine));
+                // 현재 빌드에서 비활성인 디바이스(엔진 null)는 선택돼도 CPU 로 폴백.
                 IRtspFrameDetector dmlRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_dmlEngine ?? _cpuEngine));
                 IRtspFrameDetector gpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_gpuEngine ?? _cpuEngine));
-                // GPU(C++): 네이티브 엔진 초기화 실패 시 CPU 로 폴백
                 IRtspFrameDetector nativeRtspDetector = new SerializedFrameDetector(new RtspFrameDetector((IYoloEngine?)_nativeEngine ?? _cpuEngine));
+                IRtspFrameDetector trtRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_trtEngine ?? _cpuEngine));
 
                 _snapshotVm = new SnapshotViewModel(snapshotDetector);
-                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector);
+                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector, trtRtspDetector);
                 _performanceVm = new PerformanceViewModel();
 
                 DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _performanceVm);
@@ -96,6 +108,7 @@ namespace Vision.MultiStream.Inference
                     _cpuEngine?.Dispose();
                     _dmlEngine?.Dispose();
                     _gpuEngine?.Dispose();
+                    _trtEngine?.Dispose();
                     _nativeEngine?.Dispose();
                 };
 

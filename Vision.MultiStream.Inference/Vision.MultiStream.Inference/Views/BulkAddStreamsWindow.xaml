@@ -34,6 +34,9 @@
                              VerticalAlignment="Center"/>
                 <RadioButton x:Name="GpuRadio" Content="CUDA" GroupName="Device" Margin="8,0,0,0"
                              VerticalAlignment="Center"/>
+                <RadioButton x:Name="TensorRtRadio" Content="TensorRT" GroupName="Device" Margin="8,0,0,0"
+                             VerticalAlignment="Center"
+                             ToolTip="NVIDIA TensorRT EP (FP16 + 엔진 캐시)"/>
                 <RadioButton x:Name="NativeCppRadio" Content="GPU(C++)" GroupName="Device" Margin="8,0,0,0"
                              VerticalAlignment="Center"/>
                 <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
