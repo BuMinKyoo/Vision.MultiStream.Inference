@@ -46,22 +46,13 @@ namespace Vision.MultiStream.Inference.Services.Vlm
             // (CPU 포화로 영상이 멈추던 문제 완화). GPU 모드면 Normal 로 되돌린다.
             TrySetOllamaPriority(useGpu ? ProcessPriorityClass.Normal : ProcessPriorityClass.BelowNormal);
 
-            // num_ctx 2048: 프롬프트 평가/메모리 절감. keep_alive: 모델을 유지해 콜드 재로딩 방지.
-            var options = new Dictionary<string, object> { ["num_ctx"] = 2048 };
-            if (!useGpu)
-            {
-                options["num_gpu"] = 0;    // CPU 전용: GPU 는 YOLO/영상에 양보
-                options["num_thread"] = 4; // 물리코어(8)보다 낮게 → 영상 디코딩용 CPU 여유
-            }
-            // GPU 모드: num_gpu/num_thread 미지정 → Ollama 가 VRAM 에 맞게 자동 오프로드.
-
             var payload = new
             {
                 model = _model,
                 prompt = prompt,
                 images = new[] { Convert.ToBase64String(jpeg) },
                 stream = false,
-                options = options,
+                options = BuildOptions(useGpu),
                 keep_alive = "30m"
             };
             using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
@@ -76,6 +67,45 @@ namespace Vision.MultiStream.Inference.Services.Vlm
                 return element.GetString()?.Trim() ?? string.Empty;
             }
             return string.Empty;
+        }
+
+        /// <summary>
+        /// [Phase 3.5] 빈 프롬프트로 /api/generate 를 호출하면 Ollama 가 토큰 생성 없이 모델을 메모리에
+        /// 적재만 한다(공식 preload 동작). 첫 실제 묘사 호출의 콜드 로딩(qwen2.5vl:7b ~20s)을 앱 시작
+        /// 시점으로 당긴다. options/keep_alive 는 실제 호출과 동일하게 맞춰야 같은 적재 상태가 재사용된다
+        /// (불일치 시 첫 호출에서 재로딩 발생). 워밍업은 best-effort 라 예외는 호출자가 무시할 수 있다.
+        /// </summary>
+        public async Task WarmUpAsync(CancellationToken cancellationToken = default)
+        {
+            bool useGpu = UseGpu;
+            TrySetOllamaPriority(useGpu ? ProcessPriorityClass.Normal : ProcessPriorityClass.BelowNormal);
+
+            var payload = new
+            {
+                model = _model,
+                prompt = string.Empty, // 빈 프롬프트 = 적재만 하고 즉시 반환
+                stream = false,
+                options = BuildOptions(useGpu),
+                keep_alive = "30m"
+            };
+            using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+            using HttpResponseMessage response = await Http.PostAsync(_endpoint, content, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+        }
+
+        // DescribeAsync/WarmUpAsync 공통 생성 옵션. 두 경로가 같은 적재 상태를 공유하도록 한 군데서 만든다.
+        // num_ctx 2048: 프롬프트 평가/메모리 절감. (keep_alive 는 payload 에서 지정 → 모델 유지, 콜드 재로딩 방지.)
+        private static Dictionary<string, object> BuildOptions(bool useGpu)
+        {
+            var options = new Dictionary<string, object> { ["num_ctx"] = 2048 };
+            if (!useGpu)
+            {
+                options["num_gpu"] = 0;    // CPU 전용: GPU 는 YOLO/영상에 양보
+                options["num_thread"] = 4; // 물리코어(8)보다 낮게 → 영상 디코딩용 CPU 여유
+            }
+            // GPU 모드: num_gpu/num_thread 미지정 → Ollama 가 VRAM 에 맞게 자동 오프로드.
+            return options;
         }
 
         // "ollama" 서버 프로세스(추론 수행)의 우선순위 설정. ("ollama app" GUI 는 대상 아님.)

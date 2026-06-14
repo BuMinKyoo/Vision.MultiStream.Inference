@@ -98,6 +98,10 @@ namespace Vision.MultiStream.Inference
                     _gpuEngine?.Dispose();
                     _nativeEngine?.Dispose();
                 };
+
+                // [Phase 3.5] VLM 모델을 백그라운드로 미리 적재 → 첫 사람 검출 시 콜드 로딩 지연 제거.
+                // best-effort fire-and-forget (Ollama 미기동 시 내부에서 조용히 무시).
+                _ = StreamItemViewModel.WarmUpVlmAsync();
             }
             catch (Exception ex)
             {

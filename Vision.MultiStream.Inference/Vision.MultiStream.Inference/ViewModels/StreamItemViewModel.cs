@@ -41,8 +41,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         // CPU 전용 VLM 이 멈춤의 범인인지 격리 확인용.
         private static readonly bool VlmEnabled = true;
         private const int PersonClassId = 0;
-        private static readonly TimeSpan VlmCooldown = TimeSpan.FromSeconds(30);
-        private const string VlmModel = "qwen2.5vl:7b";
+        private static readonly TimeSpan VlmCooldown = TimeSpan.FromSeconds(10);
+        private const string VlmModel = "qwen2.5vl:3b";
         // qwen2.5vl 은 한국어로 "한국어로 답하라"고 하면 영어로 답해버린다. 영어 메타 지시로 한국어 출력을
         // 강제하는 편이 안정적이다(실측 확인). 사람 행동에 초점을 맞춰 한 문장으로 묘사.
         private const string VlmPrompt = "Describe what the people in this image are doing, in one short sentence. You MUST answer ONLY in Korean (한국어로만 답하시오). Do not use any English.";
@@ -751,6 +751,27 @@ namespace Vision.MultiStream.Inference.ViewModels
             _inferenceCts = new CancellationTokenSource();
             CancellationToken token = _inferenceCts.Token;
             _inferenceTask = Task.Run(() => InferenceLoopAsync(token));
+        }
+
+        /// <summary>
+        /// [Phase 3.5] 앱 시작 시 백그라운드에서 VLM 모델을 미리 적재(워밍업)한다. best-effort —
+        /// Ollama 데몬이 안 떠 있거나 모델이 없으면 조용히 무시(첫 실제 호출에서 평소대로 콜드 로딩).
+        /// VlmEnabled/VlmModel 은 실제 서비스와 동일 값을 써 같은 적재 상태를 공유한다.
+        /// </summary>
+        public static async Task WarmUpVlmAsync()
+        {
+            if (!VlmEnabled)
+            {
+                return;
+            }
+            try
+            {
+                await new OllamaVlmClient(model: VlmModel).WarmUpAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VLM 워밍업] 실패(무시): {ex.Message}");
+            }
         }
 
         // [Step 7] VLM 묘사 파이프라인을 스트림당 1개 띄운다. 묘사/오류 콜백은 UI 스레드로 마샬링.
