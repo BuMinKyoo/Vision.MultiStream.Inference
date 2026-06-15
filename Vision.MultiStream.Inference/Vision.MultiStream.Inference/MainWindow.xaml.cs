@@ -55,6 +55,10 @@ namespace Vision.MultiStream.Inference
 
             string modelPath = Path.Combine(
                 AppContext.BaseDirectory, "Assets", "Models", "yolov8n.onnx");
+            // DirectML 전용 모델 경로. A/B 속도 비교 시 이 파일명만 yolov8n.onnx ↔ yolov8n_fp16.onnx 로 바꿔 리빌드한다.
+            // (둘 다 입출력 FP32 + 형상 동일이라 전/후처리 코드는 그대로. CPU/TRT 폴백은 FP16 이득이 없으므로 modelPath(FP32) 유지.)
+            string modelPathDml = Path.Combine(
+                AppContext.BaseDirectory, "Assets", "Models", "yolov8n_fp16.onnx");
 
             if (!File.Exists(modelPath))
             {
@@ -72,7 +76,7 @@ namespace Vision.MultiStream.Inference
                 _cpuEngine = new YoloInferenceEngine(modelPath, InferenceDevice.Cpu);
                 // ORT 패키지(=UseDirectML 심볼)에 맞춰 사용 가능한 엔진만 생성. 나머지는 null → 선택 시 CPU 폴백.
 #if USE_DIRECTML
-                _dmlEngine = TryCreateEngine(modelPath, InferenceDevice.DirectML, "DirectML");
+                _dmlEngine = TryCreateEngine(modelPathDml, InferenceDevice.DirectML, "DirectML");
                 // Phase 3 GPU(C++): 네이티브 DLL(vision_infer.dll)은 ORT+DirectML 전제 → DirectML 구성에서만 적재.
                 _nativeEngine = TryCreateNativeEngine(modelPath);
                 _gpuEngine = null;

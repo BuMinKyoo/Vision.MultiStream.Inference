@@ -45,7 +45,8 @@ Vision.MultiStream.Inference/                <-- 저장소 루트
 │       └── run_cameras_udp.bat              UDP 모드 다중 카메라 실행
 └── Vision.MultiStream.Inference/            <-- 솔루션
     └── Vision.MultiStream.Inference/
-        ├── Assets/Models/yolov8n.onnx
+        ├── Assets/Models/yolov8n.onnx       FP32 원본 (CPU / CUDA / TensorRT 폴백)
+        ├── Assets/Models/yolov8n_fp16.onnx  FP16 변환본 (DirectML 전용)
         ├── Native/win-x64/                  FFmpeg 네이티브 DLL (빌드 시 출력 폴더로 복사)
         ├── Common/
         │   ├── BaseViewModel.cs
@@ -199,6 +200,28 @@ OFF인 쪽은 큐도 디코더 스레드도 만들지 않아서 CPU/메모리 �
 
 > 초기화 실패한 옵션은 경고 팝업 후 자동으로 CPU로 폴백됩니다.
 
+### 모델 정밀도 (FP32 / FP16)
+
+디바이스별로 다른 모델 파일을 로드한다 (`MainWindow.xaml.cs`).
+
+| 엔진 | 모델 파일 | 정밀도 | 이유 |
+|---|---|---|---|
+| **DirectML** | `yolov8n_fp16.onnx` | FP16 | GPU에서 FP16 가속 + VRAM 절반 |
+| **CPU / CUDA / TensorRT 폴백** | `yolov8n.onnx` | FP32 | CPU는 FP16 네이티브 연산이 없어 오히려 느림. TensorRT는 FP32 입력 + 자체 `trt_fp16_enable`이 정석 |
+
+- 두 모델 모두 **입출력은 FP32 + 형상 동일**(`[1,3,640,640]` / `[1,84,8400]`)이라 전처리(`YoloPreprocessor`)·후처리·`Detect()` 코드는 **그대로** 공유한다.
+- FP16 변환은 `onnxconverter-common`의 `float16.convert_float_to_float16(..., keep_io_types=True)`로 1회 생성한다(입출력 FP32 유지가 핵심).
+
+  ```python
+  import onnx
+  from onnxconverter_common import float16
+  m = onnx.load("yolov8n.onnx")
+  m16 = float16.convert_float_to_float16(m, keep_io_types=True)  # I/O 는 FP32 유지
+  onnx.save(m16, "yolov8n_fp16.onnx")
+  ```
+
+- **A/B 속도 비교**: `MainWindow.xaml.cs`의 `modelPathDml` 파일명을 `yolov8n_fp16.onnx` ↔ `yolov8n.onnx`로 바꿔 리빌드. (DirectML 첫 추론은 셰이더 컴파일로 느리니 워밍업 후 정상상태 `InferenceMs`를 비교)
+
 ---
 
 ## 7. 추론 패키지 전환 방법
@@ -314,7 +337,7 @@ ffmpeg -re -stream_loop -1 -i Video1.mp4 -c copy -f rtsp rtsp://localhost:8554/c
 
 ## 11. 앱 실행
 
-1. `Assets/Models/yolov8n.onnx` 파일 확인
+1. `Assets/Models/yolov8n.onnx`(FP32) 및 `yolov8n_fp16.onnx`(DirectML용) 파일 확인
 2. `Native/win-x64/` 에 FFmpeg DLL 배치 (위 §9)
 3. Visual Studio에서 빌드 후 실행
 4. **RTSP 탭**: 이름·URL·디바이스 입력 → `+ 추가` → `▶ 시작`
