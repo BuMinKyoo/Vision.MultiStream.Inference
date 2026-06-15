@@ -176,7 +176,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
                 videoRenderer = new VideoRenderer(
                     videoFrameQueue, info.VideoTimeBase, _clock, _settings,
-                    PublishInferenceFrame, RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
+                    PublishInferenceFrame, () => _channel.Reader.Count == 0,
+                    RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
 
                 BlockingCollection<IntPtr>? audioPacketQueue = null;
                 BlockingCollection<AudioFrame>? audioFrameQueue = null;

@@ -51,6 +51,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private readonly VideoRenderSettings _settings;
         // 추론용 최신 프레임 발행(밀려난 프레임 Dispose+풀 반납은 RtspFrameSource 가 담당).
         private readonly Action<RtspFrame> _publishInference;
+        // 추론 채널이 비었을 때(직전 추론 프레임이 소비됨)만 true. HW readback(av_hwframe_transfer_data)은
+        // 공유 D3D11 락을 쥔 채 GPU→CPU 복사를 하므로, 소비자가 못 따라오면 이 게이트로 readback 자체를 건너뛴다.
+        private readonly Func<bool> _inferenceReady;
         private readonly Func<RtspFrame, bool> _raiseFrameCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvIndividualCaptured;
@@ -69,6 +72,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             MediaClock clock,
             VideoRenderSettings settings,
             Action<RtspFrame> publishInference,
+            Func<bool> inferenceReady,
             Func<RtspFrame, bool> raiseFrameCaptured,
             Action<RtspYuvFrame> raiseYuvCaptured,
             Action<RtspYuvFrame> raiseYuvIndividualCaptured,
@@ -80,6 +84,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             _clock = clock;
             _settings = settings;
             _publishInference = publishInference;
+            _inferenceReady = inferenceReady;
             _raiseFrameCaptured = raiseFrameCaptured;
             _raiseYuvCaptured = raiseYuvCaptured;
             _raiseYuvIndividualCaptured = raiseYuvIndividualCaptured;
@@ -173,8 +178,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                 }
             }
 
-            // 추론 ON 인 스트림만 GPU→CPU 다운로드 + BGR 변환(드문 경로).
-            if (_settings.ReaderFramesEnabled)
+            // 추론 ON 이고 직전 추론 프레임이 이미 소비된(채널이 빈) 스트림만 GPU→CPU 다운로드 + BGR 변환.
+            // 소비자가 못 따라오면 readback 을 건너뛰어 공유 D3D11 락 점유(직렬화 병목)를 줄인다.
+            if (_settings.ReaderFramesEnabled && _inferenceReady())
             {
                 EmitInferenceFromHw(frame, ptsSeconds);
             }
