@@ -10,10 +10,11 @@ using System.Threading.Tasks;
 namespace Vision.MultiStream.Inference.Services.Vlm
 {
     /// <summary>
-    /// 로컬 Ollama 서버의 LLaVA 계열 모델을 HTTP 로 호출하는 <see cref="IVlmClient"/> 구현.
-    /// 사전 준비(코드 외): 터미널에서 `ollama pull llava` 후 Ollama 데몬 기동(기본 11434 포트).
+    /// 로컬 Ollama 서버의 비전 모델(qwen2.5vl 계열)을 HTTP 로 호출하는 <see cref="IVlmClient"/> 구현.
+    /// 사전 준비(코드 외): 터미널에서 `ollama pull qwen2.5vl:3b` 후 Ollama 데몬 기동(기본 11434 포트).
+    /// 실제 사용 모델명은 호출부(StreamItemViewModel)에서 생성자 인자로 주입한다(현재 qwen2.5vl:3b).
     ///
-    /// 요청 (POST /api/generate): { "model":"llava", "prompt":"...", "images":["&lt;base64 JPEG&gt;"], "stream":false }
+    /// 요청 (POST /api/generate): { "model":"qwen2.5vl:3b", "prompt":"...", "images":["&lt;base64 JPEG&gt;"], "stream":false }
     /// 응답: { "response":"장면 묘사 텍스트", ... }
     /// </summary>
     public sealed class OllamaVlmClient : IVlmClient
@@ -32,7 +33,7 @@ namespace Vision.MultiStream.Inference.Services.Vlm
         private readonly string _endpoint;
         private readonly string _model;
 
-        public OllamaVlmClient(string endpoint = "http://localhost:11434/api/generate", string model = "llava")
+        public OllamaVlmClient(string endpoint = "http://localhost:11434/api/generate", string model = "qwen2.5vl:3b")
         {
             _endpoint = endpoint;
             _model = model;
@@ -71,7 +72,7 @@ namespace Vision.MultiStream.Inference.Services.Vlm
 
         /// <summary>
         /// [Phase 3.5] 빈 프롬프트로 /api/generate 를 호출하면 Ollama 가 토큰 생성 없이 모델을 메모리에
-        /// 적재만 한다(공식 preload 동작). 첫 실제 묘사 호출의 콜드 로딩(qwen2.5vl:7b ~20s)을 앱 시작
+        /// 적재만 한다(공식 preload 동작). 첫 실제 묘사 호출의 콜드 로딩(qwen2.5vl:3b)을 앱 시작
         /// 시점으로 당긴다. options/keep_alive 는 실제 호출과 동일하게 맞춰야 같은 적재 상태가 재사용된다
         /// (불일치 시 첫 호출에서 재로딩 발생). 워밍업은 best-effort 라 예외는 호출자가 무시할 수 있다.
         /// </summary>
