@@ -47,6 +47,19 @@ namespace Vision.MultiStream.Inference.Common
             return Enabled ? new Scope(name) : EmptyDisposable.Instance;
         }
 
+        // 이미 외부에서 잰 경과 시간(ms)을 집계에 넣는다. using 스코프로 감쌀 수 없는 경우
+        // (예: 네이티브 엔진이 ms 값만 돌려줄 때) 사용. 집계/1초 롤업 로직은 Measure 와 공유.
+        public static void RecordMs(string name, double elapsedMs)
+        {
+            if (!Enabled)
+            {
+                return;
+            }
+
+            long elapsedTicks = (long)(elapsedMs / TickToMs);
+            Record(name, elapsedTicks);
+        }
+
         private static void Record(string name, long elapsedTicks)
         {
             Counter counter = Counters.GetOrAdd(name, _ =>

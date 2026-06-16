@@ -20,7 +20,7 @@
     NativeCpp(vision_infer.dll)는 ORT+DirectML 로 빌드되므로 DirectML 구성에서만 동작 → EnableNativeInfer 도 함께 켠다.
   -->
   <PropertyGroup>
-    <UseDirectML>false</UseDirectML>
+    <UseDirectML>true</UseDirectML>
   </PropertyGroup>
   <PropertyGroup Condition="'$(UseDirectML)'=='true'">
     <DefineConstants>$(DefineConstants);USE_DIRECTML</DefineConstants>

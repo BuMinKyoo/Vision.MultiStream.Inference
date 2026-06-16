@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Vision.MultiStream.Inference.Common;
 using Vision.MultiStream.Inference.Models;
 using Vision.MultiStream.Inference.Services.Yolo;
 
@@ -40,6 +41,13 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                         InferenceMs = inferenceMs,
                         PostprocessMs = postprocessMs,
                     };
+
+                    // 추론 경로 타이밍을 콘솔(PerfProbe) 로그에도 1초 단위 집계로 출력.
+                    // 화면(StreamItemViewModel)과 동일 데이터지만, RTSP 디코딩 probe 와 같은 형식으로
+                    // 한곳에서 비교하기 위함. 스트림이 여러 개면 같은 이름으로 합산 집계된다.
+                    PerfProbe.RecordMs("rtsp.infer.preprocess", timings.PreprocessMs);
+                    PerfProbe.RecordMs("rtsp.infer.inference", timings.InferenceMs);
+                    PerfProbe.RecordMs("rtsp.infer.postprocess", timings.PostprocessMs);
 
                     return (detections, timings);
                 }
