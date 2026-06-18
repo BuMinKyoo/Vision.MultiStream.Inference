@@ -106,15 +106,36 @@ namespace Vision.MultiStream.Inference.Services.Yolo
                     string cacheDir = Path.Combine(AppContext.BaseDirectory, "trt_cache");
                     Directory.CreateDirectory(cacheDir);
 
-                    using var trt = new OrtTensorRTProviderOptions();
-                    trt.UpdateOptions(new Dictionary<string, string>
+                    // [INT8 - Approach A] FP32 모델(yolov8n.onnx)은 그대로 두고, TRT 가 내부에서 INT8
+                    // 변환할 때 쓸 활성값 dynamic range 를 외부 캘리브레이션 테이블로 제공한다.
+                    // (QDQ 모델 방식은 구버전 TRT 가 Q/DQ shape inference 로 엔진 빌드를 실패해서 A 채택.)
+                    // TRT EP 는 테이블을 trt_engine_cache_path 기준 파일명으로 찾으므로 캐시 폴더로 복사.
+                    const string calibTable = "calibration.flatbuffers";
+                    string calibSrc = Path.Combine(AppContext.BaseDirectory, "Assets", "Models", calibTable);
+                    bool hasCalib = File.Exists(calibSrc);
+                    if (hasCalib)
+                    {
+                        File.Copy(calibSrc, Path.Combine(cacheDir, calibTable), overwrite: true);
+                    }
+
+                    var trtOptions = new Dictionary<string, string>
                     {
                         { "device_id", "0" },
-                        { "trt_fp16_enable", "1" },           // FP16 가속(정확도 거의 동일, 속도↑)
+                        { "trt_fp16_enable", "0" },           // FP16 가속(정확도 거의 동일, 속도↑)
                         { "trt_engine_cache_enable", "1" },   // 엔진 디스크 캐시 → 재실행 시 빌드 생략
                         { "trt_engine_cache_path", cacheDir },
                         { "trt_timing_cache_enable", "1" },   // 빌드 타이밍 캐시도 재사용
-                    });
+                    };
+                    if (hasCalib)
+                    {
+                        // 테이블이 있을 때만 INT8 활성화. 없으면 FP32 엔진으로 안전하게 빌드.
+                        trtOptions["trt_int8_enable"] = "1";
+                        trtOptions["trt_int8_calibration_table_name"] = calibTable;
+                        trtOptions["trt_int8_use_native_calibration_table"] = "0"; // ORT 생성 테이블(flatbuffers) 사용
+                    }
+
+                    using var trt = new OrtTensorRTProviderOptions();
+                    trt.UpdateOptions(trtOptions);
                     options.AppendExecutionProvider_Tensorrt(trt);
                     options.AppendExecutionProvider_CUDA(0);
                 }

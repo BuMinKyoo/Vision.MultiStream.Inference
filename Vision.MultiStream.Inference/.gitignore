@@ -3,6 +3,15 @@
 [Oo]bj/
 .vs/
 
+# === INT8 양자화 도구(tools/) 부산물 ===
+# 캘리브레이션 프레임(영상에서 추출, 재생성 가능) / 파이썬 캐시 / 임시 모델·테이블 부산물
+tools/_calib_frames/
+tools/__pycache__/
+Vision.MultiStream.Inference/Assets/Models/calibration.cache
+Vision.MultiStream.Inference/Assets/Models/calibration.json
+Vision.MultiStream.Inference/Assets/Models/*.preproc.onnx
+Vision.MultiStream.Inference/Assets/Models/augmented_calib.onnx
+
 # === 네이티브 C++ 프로젝트(Vision.MultiStream.Native) 빌드 산출물 ===
 # 주의: Vision.MultiStream.Inference/Native/win-x64/*.dll 은 FFmpeg 자산(커밋 대상)이므로
 #       무시 규칙은 네이티브 프로젝트 경로(Native/Vision.MultiStream.Native/) 로만 한정한다.
