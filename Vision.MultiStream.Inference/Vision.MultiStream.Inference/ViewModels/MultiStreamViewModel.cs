@@ -48,7 +48,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             IRtspFrameDetector dmlDetector,
             IRtspFrameDetector gpuDetector,
             IRtspFrameDetector nativeDetector,
-            IRtspFrameDetector trtDetector)
+            IRtspFrameDetector trtDetector,
+            IRtspFrameDetector trtCudaPreDetector)
         {
             _detectorResolver = device => device switch
             {
@@ -56,6 +57,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 InferenceDevice.Gpu => gpuDetector,
                 InferenceDevice.NativeCpp => nativeDetector,
                 InferenceDevice.TensorRT => trtDetector,
+                InferenceDevice.TensorRtCudaPre => trtCudaPreDetector,
                 _ => cpuDetector
             };
 
@@ -224,6 +226,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged(nameof(NewUseGpu));
                 OnPropertyChanged(nameof(NewUseNativeCpp));
                 OnPropertyChanged(nameof(NewUseTensorRT));
+                OnPropertyChanged(nameof(NewUseTensorRtCudaPre));
             }
         }
 
@@ -287,6 +290,18 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        public bool NewUseTensorRtCudaPre
+        {
+            get => _newDevice == InferenceDevice.TensorRtCudaPre;
+            set
+            {
+                if (value)
+                {
+                    NewDevice = InferenceDevice.TensorRtCudaPre;
+                }
+            }
+        }
+
         // 현재 빌드(UseDirectML 토글)에서 실제로 적재된 엔진만 라디오 IsEnabled 로 노출.
         //   DirectML 빌드 → CPU/DML/NativeCpp 사용, CUDA/TensorRT 비활성
         //   Gpu 빌드      → CPU/CUDA/TensorRT 사용, DML/NativeCpp 비활성
@@ -296,11 +311,14 @@ namespace Vision.MultiStream.Inference.ViewModels
         public bool IsNativeCppAvailable => true;
         public bool IsCudaAvailable => false;
         public bool IsTensorRTAvailable => false;
+        public bool IsTensorRtCudaPreAvailable => false;
 #else
         public bool IsDirectMLAvailable => false;
         public bool IsNativeCppAvailable => false;
         public bool IsCudaAvailable => true;
         public bool IsTensorRTAvailable => true;
+        // CUDA 전처리 커널(vision_cuda.dll)은 Gpu 빌드에서만 빌드/복사되므로 TensorRT 와 동일 가용성.
+        public bool IsTensorRtCudaPreAvailable => true;
 #endif
 
         public bool NewUseInference

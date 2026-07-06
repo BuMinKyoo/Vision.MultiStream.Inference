@@ -1,8 +1,10 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using Vision.MultiStream.Inference.Models;
 using Vision.MultiStream.Inference.Services;
+using Vision.MultiStream.Inference.Services.Cuda;
 
 namespace Vision.MultiStream.Inference.Services.Yolo
 {
@@ -23,6 +25,60 @@ namespace Vision.MultiStream.Inference.Services.Yolo
         {
             List<Detection> candidates = ParseOutput(output, numChannels, numAnchors, lb);
             return ApplyNms(candidates, IouThreshold);
+        }
+
+        // CUDA 후처리에서 GPU 로 넘길 최대 후보 수. YOLOv8 는 임계값 통과 후보가 보통 수십~수백 개라
+        // 넉넉히 잡는다(초과분은 커널이 버리고 카운터로 알림 → 실질 손실 거의 없음).
+        private const int MaxCudaCandidates = 4096;
+
+        /// <summary>
+        /// [Phase 4 Step 14] ParseOutput(앵커 필터+디코드+역변환)을 CUDA 커널로 수행한 뒤,
+        /// 소수 후보에 대한 NMS 만 기존 C# ApplyNms 로 처리한다. 결과는 Parse 와 동일해야 한다.
+        /// CUDA 실패(rc!=0) 시 전체 CPU 경로(Parse)로 폴백한다.
+        /// </summary>
+        public static IReadOnlyList<Detection> ParseCuda(ReadOnlySpan<float> output, int numChannels, int numAnchors, LetterboxResult lb)
+        {
+            const int maxOut = MaxCudaCandidates;
+            float[] boxes = ArrayPool<float>.Shared.Rent(maxOut * 4);
+            int[] classes = ArrayPool<int>.Shared.Rent(maxOut);
+            float[] scores = ArrayPool<float>.Shared.Rent(maxOut);
+            try
+            {
+                int rc = CudaInterop.Postprocess(
+                    output, numChannels, numAnchors,
+                    lb.Scale, lb.PadX, lb.PadY, lb.OriginalWidth, lb.OriginalHeight, ConfidenceThreshold,
+                    boxes.AsSpan(0, maxOut * 4), classes.AsSpan(0, maxOut), scores.AsSpan(0, maxOut), maxOut,
+                    out int count);
+
+                if (rc != 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[YoloPostprocessor] CUDA 후처리 실패(rc={rc}) → CPU 폴백");
+                    return Parse(output, numChannels, numAnchors, lb);
+                }
+
+                int n = Math.Min(count, maxOut);
+                var candidates = new List<Detection>(n);
+                for (int k = 0; k < n; k++)
+                {
+                    candidates.Add(new Detection
+                    {
+                        X = boxes[k * 4 + 0],
+                        Y = boxes[k * 4 + 1],
+                        Width = boxes[k * 4 + 2],
+                        Height = boxes[k * 4 + 3],
+                        ClassId = classes[k],
+                        ClassName = CocoLabels.Get(classes[k]),
+                        Confidence = scores[k]
+                    });
+                }
+                return ApplyNms(candidates, IouThreshold);
+            }
+            finally
+            {
+                ArrayPool<float>.Shared.Return(boxes);
+                ArrayPool<int>.Shared.Return(classes);
+                ArrayPool<float>.Shared.Return(scores);
+            }
         }
 
         private static List<Detection> ParseOutput(ReadOnlySpan<float> output, int numChannels, int numAnchors, LetterboxResult lb)

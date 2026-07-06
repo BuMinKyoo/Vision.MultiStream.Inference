@@ -238,6 +238,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             InferenceDevice.Gpu => "CUDA",
             InferenceDevice.NativeCpp => "C++",
             InferenceDevice.TensorRT => "TRT",
+            InferenceDevice.TensorRtCudaPre => "TRT+CU전후처리",
             _ => "CPU"
         };
 

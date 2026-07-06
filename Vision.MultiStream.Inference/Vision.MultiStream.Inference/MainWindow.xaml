@@ -126,7 +126,11 @@
                                     <RadioButton Content="GPU(C++,DML)" IsChecked="{Binding NewUseNativeCpp}" GroupName="NewDevice" Margin="8,0,0,2"
                                                  IsEnabled="{Binding IsNativeCppAvailable}"
                                                  VerticalAlignment="Center"/>
-                                    <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,2"
+                                    <RadioButton Content="CUDA전후처리+TRT" IsChecked="{Binding NewUseTensorRtCudaPre}" GroupName="NewDevice" Margin="8,0,0,2"
+             IsEnabled="{Binding IsTensorRtCudaPreAvailable}"
+             VerticalAlignment="Center"
+             ToolTip="전처리+후처리를 CUDA 커널(vision_cuda.dll)로 수행 + 추론은 TensorRT. CPU 전/후처리 대비 효과 측정용"/>
+                                            <CheckBox Content="추론 사용" IsChecked="{Binding NewUseInference}" Margin="12,0,0,2"
                                               VerticalAlignment="Center"
                                               ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
                                 </WrapPanel>

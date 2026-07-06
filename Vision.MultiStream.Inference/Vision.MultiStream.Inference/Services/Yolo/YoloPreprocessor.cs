@@ -4,6 +4,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Vision.MultiStream.Inference.Services.Cuda;
 
 namespace Vision.MultiStream.Inference.Services.Yolo
 {
@@ -115,6 +116,46 @@ namespace Vision.MultiStream.Inference.Services.Yolo
             }
 
             // 풀 버퍼를 그대로 백킹으로 쓰는 텐서(정확 길이로 슬라이스). 추론 후 LetterboxResult.Dispose 가 반납.
+            var tensor = new DenseTensor<float>(buffer.AsMemory(0, tensorLength), new[] { 1, 3, size, size });
+            return new LetterboxResult(tensor, scale, padX, padY, width, height)
+            {
+                PooledBuffer = buffer
+            };
+        }
+
+        /// <summary>
+        /// [Phase 4 Step 14] 위 CPU 경로와 동일한 letterbox 결과를 CUDA 커널(vision_cuda.dll)로 만든다.
+        /// letterbox 파라미터(scale/newW/newH/padX/padY)는 CPU 버전과 같은 공식으로 여기서 계산해
+        /// 네이티브에 넘긴다(반올림 규칙 공유 → 결과 일치). 텐서 백킹은 CPU 경로와 동일하게 ArrayPool 사용.
+        /// CUDA 실패(rc!=0) 시 관리 코드 CPU 경로로 폴백해 앱을 계속 돌린다.
+        /// </summary>
+        public static LetterboxResult PreprocessCuda(byte[] bgrPixels, int width, int height)
+        {
+            const int size = InputSize;            // 640
+            int tensorLength = 3 * size * size;    // [1,3,640,640]
+
+            float scale = Math.Min((float)size / width, (float)size / height);
+            int newW = (int)Math.Round(width * scale);
+            int newH = (int)Math.Round(height * scale);
+            if (newW < 1) { newW = 1; }
+            if (newH < 1) { newH = 1; }
+            int padX = (size - newW) / 2;
+            int padY = (size - newH) / 2;
+
+            float[] buffer = ArrayPool<float>.Shared.Rent(tensorLength);
+
+            int rc = CudaInterop.Preprocess(
+                bgrPixels, width, height, newW, newH, padX, padY, scale,
+                buffer.AsSpan(0, tensorLength));
+
+            if (rc != 0)
+            {
+                // CUDA 실패 → 빌린 버퍼 반납하고 CPU 경로로 폴백(원인은 Output 로그로).
+                ArrayPool<float>.Shared.Return(buffer);
+                System.Diagnostics.Debug.WriteLine($"[YoloPreprocessor] CUDA 전처리 실패(rc={rc}) → CPU 폴백");
+                return Preprocess(bgrPixels, width, height);
+            }
+
             var tensor = new DenseTensor<float>(buffer.AsMemory(0, tensorLength), new[] { 1, 3, size, size });
             return new LetterboxResult(tensor, scale, padX, padY, width, height)
             {

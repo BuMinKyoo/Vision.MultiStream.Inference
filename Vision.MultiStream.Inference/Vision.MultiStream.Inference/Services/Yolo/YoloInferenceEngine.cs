@@ -19,7 +19,9 @@ namespace Vision.MultiStream.Inference.Services.Yolo
     /// </summary>
     // NativeCpp: Phase 3 "GPU(C++)" — 네이티브 DLL(vision_infer.dll) + DirectML 로 추론.
     // TensorRT: Phase 3.5 — ORT TensorRT EP(NVIDIA 전용, FP16 + 엔진 캐시).
-    public enum InferenceDevice { Cpu, DirectML, Gpu, NativeCpp, TensorRT }
+    // TensorRtCudaPre: Phase 4 Step 14 — 추론은 TensorRT EP 와 동일하되, 전처리를 C# CPU 대신
+    //   CUDA 커널(vision_cuda.dll)로 수행하는 조합. 전처리 병목을 GPU 로 넘긴 효과 측정용.
+    public enum InferenceDevice { Cpu, DirectML, Gpu, NativeCpp, TensorRT, TensorRtCudaPre }
 
     public sealed class YoloInferenceEngine : IYoloEngine, IDisposable
     {
@@ -45,11 +47,15 @@ namespace Vision.MultiStream.Inference.Services.Yolo
         // 처럼) aliasing 되어 서로 다른 직렬화 게이트가 같은 엔진을 동시에 호출해도 안전하도록 락으로 보호.
         private readonly object _runLock = new object();
 
+        // true 면 후처리(ParseOutput)를 C# CPU 대신 CUDA 커널(vision_cuda.dll)로 수행(Phase 4 Step 14).
+        private readonly bool _useCudaPostprocess;
+
         public InferenceDevice Device { get; }
 
-        public YoloInferenceEngine(string modelPath, InferenceDevice device = InferenceDevice.Cpu)
+        public YoloInferenceEngine(string modelPath, InferenceDevice device = InferenceDevice.Cpu, bool useCudaPostprocess = false)
         {
             Device = device;
+            _useCudaPostprocess = useCudaPostprocess;
             var options = new SessionOptions();
 
             // DML EP(AppendExecutionProvider_DML)는 DirectML 패키지에만, CUDA/TensorRT EP 는 Gpu 패키지에만
@@ -201,8 +207,9 @@ namespace Vision.MultiStream.Inference.Services.Yolo
 
                 // 출력 텐서: [1, 84, 8400] → (cx, cy, w, h, class0~class79 확률) × 8400개 후보
                 var swPostprocess = Stopwatch.StartNew();
-                IReadOnlyList<Detection> detections = YoloPostprocessor.Parse(
-                    _outputBuffer.AsSpan(0, _outputLen), _numChannels, _numAnchors, lb);
+                IReadOnlyList<Detection> detections = _useCudaPostprocess
+                    ? YoloPostprocessor.ParseCuda(_outputBuffer.AsSpan(0, _outputLen), _numChannels, _numAnchors, lb)
+                    : YoloPostprocessor.Parse(_outputBuffer.AsSpan(0, _outputLen), _numChannels, _numAnchors, lb);
                 swPostprocess.Stop();
 
                 return (detections, swInference.Elapsed.TotalMilliseconds, swPostprocess.Elapsed.TotalMilliseconds);

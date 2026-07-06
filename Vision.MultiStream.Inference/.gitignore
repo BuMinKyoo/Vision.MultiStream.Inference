@@ -30,3 +30,13 @@ Native/Vision.MultiStream.Native/**/*.dll
 Native/Vision.MultiStream.Native/**/*.recipe
 Native/Vision.MultiStream.Native/**/*.tlog
 Native/Vision.MultiStream.Native/**/*.lastbuildstate
+
+# === Phase 4 CUDA 프로젝트(Vision.MultiStream.Cuda) 빌드 산출물 ===
+# 출력/중간 폴더: vcxproj OutDir/IntDir = x64\<Config>\, nvcc --keep-dir = Vision.M.<guid>\
+Native/Vision.MultiStream.Cuda/x64/
+Native/Vision.MultiStream.Cuda/Vision.M.*/
+Native/Vision.MultiStream.Cuda/**/*.obj
+Native/Vision.MultiStream.Cuda/**/*.pdb
+Native/Vision.MultiStream.Cuda/**/*.exp
+Native/Vision.MultiStream.Cuda/**/*.lib
+Native/Vision.MultiStream.Cuda/**/*.dll

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    Phase 4 CUDA 네이티브 DLL (vision_cuda.dll).
+    x64 DynamicLibrary. C# WPF 프로젝트가 P/Invoke 로 호출한다.
+    빌드 설정 기준(이 PC 제약): CUDA 12.9 + MSVC 14.44(v143) + sm_61(P2000) + /utf-8.
+      - CUDA 13.2 는 sm_61(Pascal) 미지원 → 12.9 필수.
+      - MSVC 14.51(v145) 은 CUDA 12.9 cudafe++ 와 충돌 → PlatformToolset v143(=14.44)로 고정.
+    CUDA build customization(CUDA 12.9.props/.targets)은 VS2026 BuildCustomizations 에 복사해 둠.
+  -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7E3C9A41-1F2B-4C8D-AE60-9D12C0DA5901}</ProjectGuid>
+    <RootNamespace>VisionMultiStreamCuda</RootNamespace>
+    <!-- 출력 DLL 이름을 vision_cuda.dll 로 고정 (DllImport 라이브러리 이름) -->
+    <TargetName>vision_cuda</TargetName>
+    <!-- v143 = MSVC 14.44 (CUDA 12.9 호환). VS2026 기본 v145(14.51)은 cudafe++ 충돌. -->
+    <PlatformToolset>v143</PlatformToolset>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <!-- 통합 파일을 수동 복사했으므로 CUDA 12.9 설치 경로를 명시(설치 시 자동 등록되는 값) -->
+    <CudaToolkitDir>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\</CudaToolkitDir>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- CUDA build customization: .cu 를 CudaCompile 항목으로 인식 + nvcc 호출 규칙 주입 -->
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.props" />
+  </ImportGroup>
+
+  <PropertyGroup>
+    <!-- 출력/중간 산출물을 프로젝트 폴더 아래로 고정 (csproj 복사 경로와 정합) -->
+    <OutDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\obj\</IntDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- 한글 주석이 cp949 로 오인되지 않도록 UTF-8 강제 -->
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+    </ClCompile>
+    <CudaCompile>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <!-- P2000 = Pascal. compute_61/sm_61 로 코드 생성 -->
+      <CodeGeneration>compute_61,sm_61</CodeGeneration>
+      <!-- nvcc 가 호스트(cl) 컴파일 시 한글 주석 처리 + 신버전 MSVC 경고 억제 -->
+      <AdditionalOptions>-allow-unsupported-compiler -Wno-deprecated-gpu-targets -Xcompiler /utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </CudaCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- 정적 CUDA 런타임: cudart64_*.dll 을 따로 배포하지 않아도 됨 -->
+      <AdditionalDependencies>cudart_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- cudart_static(정적 CRT, LIBCMT) ↔ 프로젝트(동적 CRT) 충돌(LNK4098) 억제: 동적 CRT 로 통일 -->
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <CudaCompile Include="preprocess.cu" />
+    <CudaCompile Include="postprocess.cu" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.targets" />
+  </ImportGroup>
+</Project>

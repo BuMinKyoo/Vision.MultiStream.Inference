@@ -18,6 +18,7 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _dmlEngine;
         private readonly YoloInferenceEngine? _gpuEngine;
         private readonly YoloInferenceEngine? _trtEngine;  // Phase 3.5 TensorRT
+        private readonly YoloInferenceEngine? _trtCudaEngine; // Phase 4: TRT 추론 + CUDA 전/후처리
         private readonly NativeYoloEngine? _nativeEngine; // Phase 3 GPU(C++)
         private SnapshotViewModel? _snapshotVm;
         private MultiStreamViewModel? _multiStreamVm;
@@ -81,11 +82,15 @@ namespace Vision.MultiStream.Inference
                 _nativeEngine = TryCreateNativeEngine(modelPath);
                 _gpuEngine = null;
                 _trtEngine = null;
+                _trtCudaEngine = null;
 #else
                 _dmlEngine = null;
                 _nativeEngine = null;
                 _gpuEngine = TryCreateEngine(modelPath, InferenceDevice.Gpu, "GPU(CUDA)");
                 _trtEngine = TryCreateEngine(modelPath, InferenceDevice.TensorRT, "TensorRT");
+                // TRT 추론 엔진을 하나 더(엔진 캐시는 디스크 공유라 재빌드 없음). 이쪽만 후처리를 CUDA 로.
+                // 전처리는 detector 의 useCudaPreprocess 로 CUDA. → "CUDA전처리+TRT" 는 전/후처리 모두 GPU.
+                _trtCudaEngine = TryCreateEngine(modelPath, InferenceDevice.TensorRT, "TensorRT(CUDA후처리)", useCudaPostprocess: true);
 #endif
 
                 var snapshotDetector = new SnapshotDetector(_cpuEngine);
@@ -97,9 +102,12 @@ namespace Vision.MultiStream.Inference
                 IRtspFrameDetector gpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_gpuEngine ?? _cpuEngine));
                 IRtspFrameDetector nativeRtspDetector = new SerializedFrameDetector(new RtspFrameDetector((IYoloEngine?)_nativeEngine ?? _cpuEngine));
                 IRtspFrameDetector trtRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_trtEngine ?? _cpuEngine));
+                // [Phase 4 Step 14] 추론은 위 TensorRT 엔진과 동일(공유, 엔진 내부 _runLock 이 동시성 보장),
+                // 전처리만 CUDA 커널로 수행하는 조합. CPU 전처리 대비 효과 측정용.
+                IRtspFrameDetector trtCudaPreRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_trtCudaEngine ?? _cpuEngine, useCudaPreprocess: true));
 
                 _snapshotVm = new SnapshotViewModel(snapshotDetector);
-                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector, trtRtspDetector);
+                _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector, trtRtspDetector, trtCudaPreRtspDetector);
                 _performanceVm = new PerformanceViewModel();
 
                 DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _performanceVm);
@@ -113,6 +121,7 @@ namespace Vision.MultiStream.Inference
                     _dmlEngine?.Dispose();
                     _gpuEngine?.Dispose();
                     _trtEngine?.Dispose();
+                    _trtCudaEngine?.Dispose();
                     _nativeEngine?.Dispose();
                 };
 
@@ -130,11 +139,11 @@ namespace Vision.MultiStream.Inference
             }
         }
 
-        private YoloInferenceEngine? TryCreateEngine(string modelPath, InferenceDevice device, string label)
+        private YoloInferenceEngine? TryCreateEngine(string modelPath, InferenceDevice device, string label, bool useCudaPostprocess = false)
         {
             try
             {
-                return new YoloInferenceEngine(modelPath, device);
+                return new YoloInferenceEngine(modelPath, device, useCudaPostprocess);
             }
             catch (Exception ex)
             {

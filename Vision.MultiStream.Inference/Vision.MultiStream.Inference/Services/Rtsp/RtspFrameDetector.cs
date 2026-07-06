@@ -15,10 +15,13 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
     public sealed class RtspFrameDetector : IRtspFrameDetector
     {
         private readonly IYoloEngine _engine;
+        // true 면 전처리를 C# CPU(YoloPreprocessor.Preprocess) 대신 CUDA 커널로 수행(Phase 4 Step 14).
+        private readonly bool _useCudaPreprocess;
 
-        public RtspFrameDetector(IYoloEngine engine)
+        public RtspFrameDetector(IYoloEngine engine, bool useCudaPreprocess = false)
         {
             _engine = engine;
+            _useCudaPreprocess = useCudaPreprocess;
         }
 
         public Task<(IReadOnlyList<Detection> Detections, InferenceTimings Timings)> DetectAsync(byte[] bgrPixels, int width, int height, CancellationToken cancellationToken = default)
@@ -28,7 +31,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var swPreprocess = Stopwatch.StartNew();
-                LetterboxResult lb = YoloPreprocessor.Preprocess(bgrPixels, width, height);
+                LetterboxResult lb = _useCudaPreprocess
+                    ? YoloPreprocessor.PreprocessCuda(bgrPixels, width, height)
+                    : YoloPreprocessor.Preprocess(bgrPixels, width, height);
                 swPreprocess.Stop();
 
                 try
@@ -45,7 +50,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                     // 추론 경로 타이밍을 콘솔(PerfProbe) 로그에도 1초 단위 집계로 출력.
                     // 화면(StreamItemViewModel)과 동일 데이터지만, RTSP 디코딩 probe 와 같은 형식으로
                     // 한곳에서 비교하기 위함. 스트림이 여러 개면 같은 이름으로 합산 집계된다.
-                    PerfProbe.RecordMs("rtsp.infer.preprocess", timings.PreprocessMs);
+                    PerfProbe.RecordMs(_useCudaPreprocess ? "rtsp.infer.preprocess.cuda" : "rtsp.infer.preprocess", timings.PreprocessMs);
                     PerfProbe.RecordMs("rtsp.infer.inference", timings.InferenceMs);
                     PerfProbe.RecordMs("rtsp.infer.postprocess", timings.PostprocessMs);
 

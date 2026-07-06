@@ -26,6 +26,13 @@
     <DefineConstants>$(DefineConstants);USE_DIRECTML</DefineConstants>
     <EnableNativeInfer>true</EnableNativeInfer>
   </PropertyGroup>
+  <!--
+    Phase 4 CUDA 네이티브 DLL(vision_cuda.dll)은 순수 CUDA(ORT 무관)라 Gpu 빌드(UseDirectML=false)에서 켠다.
+    DirectML 빌드에서는 CUDA 경로를 안 쓰므로 스킵.
+  -->
+  <PropertyGroup Condition="'$(UseDirectML)'!='true'">
+    <EnableCudaInfer>true</EnableCudaInfer>
+  </PropertyGroup>
 
   <ItemGroup>
     <!-- ORT 실행 공급자 패키지: UseDirectML 값에 따라 자동 선택 (위 PropertyGroup 참고). -->
@@ -117,6 +124,41 @@
     <Error Condition="!Exists('$(NativeInferDll)')"
            Text="네이티브 DLL 이 생성되지 않았습니다: $(NativeInferDll)" />
     <Copy SourceFiles="$(NativeInferDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Phase 4 CUDA: vision_cuda.dll 자동 빌드 + 출력 폴더 복사 (Gpu 빌드 전용).
+    .vcxproj 가 CUDA 12.9 build customization + sm_61 로 nvcc 를 돌려 DLL 을 만든다.
+    ORT 무관이므로 OnnxRuntimeDir 같은 파라미터는 넘기지 않는다.
+  -->
+  <PropertyGroup>
+    <!-- CUDA DLL 은 성능이 목적이라 C# 구성과 무관하게 항상 Release(-O3, 디버그 -G 없음)로 빌드한다.
+         Debug(-G)는 커널 최적화를 꺼서 수 배~10배 느려지므로 성능 측정/실사용에 부적합. -->
+    <CudaConfiguration>Release</CudaConfiguration>
+    <CudaInferProj>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Cuda\Vision.MultiStream.Cuda.vcxproj</CudaInferProj>
+    <CudaInferDll>$(MSBuildThisFileDirectory)..\Native\Vision.MultiStream.Cuda\x64\$(CudaConfiguration)\vision_cuda.dll</CudaInferDll>
+  </PropertyGroup>
+
+  <Target Name="BuildCudaInferDll" BeforeTargets="BeforeBuild" Condition="'$(EnableCudaInfer)'=='true'">
+    <PropertyGroup>
+      <VsWhereExe>$([System.Environment]::GetEnvironmentVariable('ProgramFiles(x86)'))\Microsoft Visual Studio\Installer\vswhere.exe</VsWhereExe>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(VsWhereExe)')"
+           Text="vswhere.exe 를 찾을 수 없습니다(VS C++ 빌드 도구 필요): $(VsWhereExe)" />
+    <Exec Command="&quot;$(VsWhereExe)&quot; -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe"
+          ConsoleToMSBuild="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="VsMsBuildExe" />
+    </Exec>
+    <Error Condition="'$(VsMsBuildExe)'==''"
+           Text="VS MSBuild.exe 를 찾을 수 없습니다. Visual Studio C++ 워크로드를 설치하세요." />
+    <Message Importance="high" Text="[Phase4] CUDA 추론 DLL 빌드: $(CudaInferProj) ($(CudaConfiguration)|x64)" />
+    <Exec Command="&quot;$(VsMsBuildExe)&quot; &quot;$(CudaInferProj)&quot; /p:Configuration=$(CudaConfiguration) /p:Platform=x64 /v:minimal /nologo" />
+  </Target>
+
+  <Target Name="CopyCudaInferDll" AfterTargets="Build" DependsOnTargets="BuildCudaInferDll" Condition="'$(EnableCudaInfer)'=='true'">
+    <Error Condition="!Exists('$(CudaInferDll)')"
+           Text="CUDA DLL 이 생성되지 않았습니다: $(CudaInferDll)" />
+    <Copy SourceFiles="$(CudaInferDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

@@ -17,6 +17,7 @@ namespace Vision.MultiStream.Inference.Views
 #if USE_DIRECTML
             GpuRadio.IsEnabled = false;
             TensorRtRadio.IsEnabled = false;
+            TensorRtCudaPreRadio.IsEnabled = false;
 #else
             DmlRadio.IsEnabled = false;
             NativeCppRadio.IsEnabled = false;
@@ -59,6 +60,10 @@ namespace Vision.MultiStream.Inference.Views
             else if (TensorRtRadio.IsChecked == true)
             {
                 SelectedDevice = InferenceDevice.TensorRT;
+            }
+            else if (TensorRtCudaPreRadio.IsChecked == true)
+            {
+                SelectedDevice = InferenceDevice.TensorRtCudaPre;
             }
             else if (NativeCppRadio.IsChecked == true)
             {
