@@ -10,7 +10,7 @@ namespace Vision.MultiStream.Inference.Services.Yolo
     ///
     /// 텐서 백킹 버퍼가 ArrayPool 에서 빌려온 것이면 <see cref="PooledBuffer"/> 에 보관되며,
     /// 추론이 끝난 뒤 <see cref="Dispose"/> 로 풀에 반납한다(프레임당 LOH 할당 제거).
-    /// 파일 경로(스냅샷)처럼 풀을 쓰지 않는 경우 PooledBuffer 는 null 이고 Dispose 는 no-op.
+    /// 풀을 쓰지 않는 경우 PooledBuffer 는 null 이고 Dispose 는 no-op.
     /// </summary>
     public sealed record LetterboxResult(
         DenseTensor<float> Tensor, // ONNX 입력 텐서 [1, 3, 640, 640] (CHW, 0~1 정규화)

@@ -3,7 +3,6 @@ using System.IO;
 using System.Windows;
 using Vision.MultiStream.Inference.Services.Direct3D;
 using Vision.MultiStream.Inference.Services.Rtsp;
-using Vision.MultiStream.Inference.Services.Snapshot;
 using Vision.MultiStream.Inference.Services.Yolo;
 using Vision.MultiStream.Inference.ViewModels;
 
@@ -20,7 +19,6 @@ namespace Vision.MultiStream.Inference
         private readonly YoloInferenceEngine? _trtEngine;  // Phase 3.5 TensorRT
         private readonly YoloInferenceEngine? _trtCudaEngine; // Phase 4: TRT 추론 + CUDA 전/후처리
         private readonly NativeYoloEngine? _nativeEngine; // Phase 3 GPU(C++)
-        private SnapshotViewModel? _snapshotVm;
         private MultiStreamViewModel? _multiStreamVm;
         private PerformanceViewModel? _performanceVm;
 
@@ -93,8 +91,6 @@ namespace Vision.MultiStream.Inference
                 _trtCudaEngine = TryCreateEngine(modelPath, InferenceDevice.TensorRT, "TensorRT(CUDA후처리)", useCudaPostprocess: true);
 #endif
 
-                var snapshotDetector = new SnapshotDetector(_cpuEngine);
-
                 // 같은 ONNX 세션을 여러 스트림이 동시에 호출하지 않도록 디바이스별로 직렬화 래핑
                 IRtspFrameDetector cpuRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_cpuEngine));
                 // 현재 빌드에서 비활성인 디바이스(엔진 null)는 선택돼도 CPU 로 폴백.
@@ -106,15 +102,13 @@ namespace Vision.MultiStream.Inference
                 // 전처리만 CUDA 커널로 수행하는 조합. CPU 전처리 대비 효과 측정용.
                 IRtspFrameDetector trtCudaPreRtspDetector = new SerializedFrameDetector(new RtspFrameDetector(_trtCudaEngine ?? _cpuEngine, useCudaPreprocess: true));
 
-                _snapshotVm = new SnapshotViewModel(snapshotDetector);
                 _multiStreamVm = new MultiStreamViewModel(cpuRtspDetector, dmlRtspDetector, gpuRtspDetector, nativeRtspDetector, trtRtspDetector, trtCudaPreRtspDetector);
                 _performanceVm = new PerformanceViewModel();
 
-                DataContext = new ShellViewModel(_snapshotVm, _multiStreamVm, _performanceVm);
+                DataContext = new ShellViewModel(_multiStreamVm, _performanceVm);
 
                 Closed += (_, _) =>
                 {
-                    _snapshotVm?.Dispose();
                     _multiStreamVm?.Dispose();
                     _performanceVm?.Dispose();
                     _cpuEngine?.Dispose();

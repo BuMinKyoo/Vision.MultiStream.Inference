@@ -41,7 +41,6 @@
     <!-- Gpu 1.20.1 = CUDA 12.x + cuDNN 9.x + TensorRT 10.x 런타임 (cudart64_12 / cudnn64_9 / nvinfer_10 로드) -->
     <PackageReference Condition="'$(UseDirectML)'!='true'" Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.20.1" />
 
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20241108" />
 

@@ -196,7 +196,6 @@ fixed (float* pOut = _outputBuffer)
 | 패키지 | 용도 |
 |---|---|
 | `Microsoft.ML.OnnxRuntime.Gpu` / `Microsoft.ML.OnnxRuntime.DirectML` (둘 다 1.20.1) | ONNX 추론. `UseDirectML` 토글로 둘 중 하나 선택 (§10) |
-| `SixLabors.ImageSharp` | 이미지 전처리 (리사이즈, 정규화, HWC→CHW) |
 | `OpenCvSharp4` / `OpenCvSharp4.runtime.win` | 보조 이미지 처리 (VLM 입력 JPEG 인코딩 등) |
 | `FFmpeg.AutoGen` (8.1.0) | RTSP 수신 + H.264/AAC 디코딩 P/Invoke 바인딩 |
 | `Vortice.Direct3D11` / `Direct3D9` / `D3DCompiler` (3.8.3) | GPU 컴포지터 + D3DImage 표시 + YUV→RGB 셰이더 |
@@ -239,12 +238,10 @@ Vision.MultiStream.Inference/                <-- 저장소 루트
     └── Vision.MultiStream.Inference/        <-- C# 메인 프로젝트
         ├── Assets/Models/yolov8n.onnx       FP32 원본 (CPU / CUDA / TensorRT / C++)
         ├── Assets/Models/yolov8n_fp16.onnx  FP16 변환본 (DirectML 전용)
-        ├── Assets/TestImages/               스냅샷 탭 테스트용 정적 이미지
         ├── Native/win-x64/                  FFmpeg 네이티브 DLL (빌드 시 출력 폴더로 복사)
         ├── Common/
         │   ├── BaseViewModel.cs
-        │   ├── RelayCommand.cs / AsyncRelayCommand.cs
-        │   ├── InverseBoolConverter.cs
+        │   ├── RelayCommand.cs
         │   └── PerfProbe.cs                 CPU/메모리/GC 샘플링 (성능 상태바)
         ├── Models/
         │   ├── Detection.cs                 검출 결과 1건 (박스 좌표, 클래스, 신뢰도)
@@ -276,9 +273,6 @@ Vision.MultiStream.Inference/                <-- 저장소 루트
         │   │       ├── AudioRenderer.cs     IAudioOutput 으로 페이싱 재생
         │   │       ├── HwDeviceContext.cs   D3D11VA 디바이스/컨텍스트 (디코더·컴포지터 공유)
         │   │       └── FfmpegNative.cs      P/Invoke 헬퍼 + 큐 잔량 free
-        │   ├── Snapshot/
-        │   │   ├── SnapshotDetector.cs      정적 이미지 추론 어댑터
-        │   │   └── ISnapshotDetector.cs
         │   ├── Vlm/
         │   │   ├── IVlmClient.cs
         │   │   ├── OllamaVlmClient.cs       로컬 Ollama HTTP 호출 (CPU/GPU 토글, 워밍업)
@@ -294,7 +288,6 @@ Vision.MultiStream.Inference/                <-- 저장소 루트
         │   ├── ShellViewModel.cs            최상위 VM (탭 묶음)
         │   ├── MultiStreamViewModel.cs      다중 스트림 컬렉션 + 전체 제어 + 컴포지터 연결
         │   ├── StreamItemViewModel.cs       스트림 1개 단위 VM (캡처/추론/렌더링/오디오/VLM)
-        │   ├── SnapshotViewModel.cs         스냅샷 탭 VM (정적 이미지 검출)
         │   └── PerformanceViewModel.cs      성능 상태바 VM (CPU/RAM/GC)
         ├── Views/
         │   └── BulkAddStreamsWindow.xaml    URL 일괄 추가 모달
@@ -432,10 +425,6 @@ YOLO가 **사람(COCO class 0)** 을 검출한 프레임만 로컬 VLM에 넘겨
 - **추론 디바이스**: 현재 빌드에서 사용 가능한 옵션만 활성화(§8). '추론 사용' 체크로 추론 루프 ON/OFF.
 - **VLM**: 'VLM 사용' 체크 + CPU/GPU 디바이스(전역).
 - **토글**: 스트림별 🎥(영상) / 🔊(소리) / 🧠(추론) 개별 ON/OFF, 전체 버튼도 별도 제공.
-
-### 스냅샷 (정적 이미지) 탭
-
-이미지를 열어 CPU 엔진으로 1회 검출하고 박스 + 검출 결과 리스트(클래스/신뢰도/좌표)를 표시한다.
 
 ---
 
