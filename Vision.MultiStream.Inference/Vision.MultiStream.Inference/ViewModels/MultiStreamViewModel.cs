@@ -12,8 +12,6 @@ using Vision.MultiStream.Inference.Views;
 
 namespace Vision.MultiStream.Inference.ViewModels
 {
-    public enum LayoutMode { Auto, Grid2x2, Grid3x3, Grid4x4 }
-
     /// <summary>
     /// 스트림 표시/디코딩 방식.
     ///   - CpuIndividual : SW 디코딩 + per-stream 개별 표시(D3DImageYuvPresenter).
@@ -25,7 +23,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
     /// <summary>
     /// 다중 RTSP 스트림 관리 ViewModel.
-    /// 책임: StreamItemViewModel 컬렉션 + 사이드 패널의 추가/삭제/일괄/전체시작중지/레이아웃 명령.
+    /// 책임: StreamItemViewModel 컬렉션 + 사이드 패널의 추가/삭제/일괄/전체시작중지 명령 + 컴포지터 타일 배치.
     /// 추론 디바이스(IRtspFrameDetector)는 이미 SerializedFrameDetector로 래핑된 상태로 주입받음.
     /// </summary>
     public sealed class MultiStreamViewModel : BaseViewModel, IDisposable
@@ -38,7 +36,6 @@ namespace Vision.MultiStream.Inference.ViewModels
         private bool _newUseInference = true;
         // 컴포지터가 없으면(GPU 없음) 기본값은 개별. AttachCompositor 시 컴포지터 모드로 올린다.
         private StreamRenderMode _newRenderMode = StreamRenderMode.CpuIndividual;
-        private LayoutMode _layout = LayoutMode.Auto;
         private int _autoCounter = 1;
         private StreamCompositor? _compositor;
 
@@ -123,7 +120,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             RecomputeLayout();
         }
 
-        // WPF UniformGrid 규칙(Auto = ceil(sqrt(N)), Grid2x2/3x3/4x4 = 그 열수)을 그대로 따라
+        // WPF UniformGrid 자동 분할 규칙(cols = rows = ceil(sqrt(N)))을 그대로 따라
         // 컴포지터 surface 좌표계로 셀 rect 를 계산해 SetLayout 으로 전달.
         // 슬롯이 없는(시작 안 한) 스트림은 빈 자리로 두고 그 셀은 컴포지터에서 검정으로 남는다.
         private void RecomputeLayout()
@@ -139,20 +136,10 @@ namespace Vision.MultiStream.Inference.ViewModels
                 return;
             }
 
-            int cols, rows;
-            if (GridColumns > 0)
-            {
-                // 고정 그리드 모드(Grid2x2/3x3/4x4): rows 도 같이 고정 → 스트림이 모자라도 같은 격자 유지.
-                cols = GridColumns;
-                rows = GridRows;
-            }
-            else
-            {
-                // Auto: WPF UniformGrid 의 실제 자동 분할 규칙과 동일하게 맞춤
-                // (cols=rows=ceil(sqrt(N)) → 정사각 격자. N=2 면 2×2 = 4셀, 위 2개만 채움).
-                cols = (int)Math.Ceiling(Math.Sqrt(n));
-                rows = cols;
-            }
+            // WPF UniformGrid 의 실제 자동 분할 규칙과 동일하게 맞춤
+            // (cols=rows=ceil(sqrt(N)) → 정사각 격자. N=2 면 2×2 = 4셀, 위 2개만 채움).
+            int cols = (int)Math.Ceiling(Math.Sqrt(n));
+            int rows = cols;
             int cellW = _compositor.Width / cols;
             int cellH = _compositor.Height / rows;
 
@@ -420,42 +407,6 @@ namespace Vision.MultiStream.Inference.ViewModels
                 }
             }
         }
-
-        public LayoutMode Layout
-        {
-            get => _layout;
-            set
-            {
-                if (_layout == value)
-                {
-                    return;
-                }
-                _layout = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(GridColumns));
-                OnPropertyChanged(nameof(GridRows));
-                RecomputeLayout();
-            }
-        }
-
-        // UniformGrid.Columns 바인딩용. 0 = 자동 (UniformGrid 기본 동작).
-        public int GridColumns => _layout switch
-        {
-            LayoutMode.Grid2x2 => 2,
-            LayoutMode.Grid3x3 => 3,
-            LayoutMode.Grid4x4 => 4,
-            _ => 0
-        };
-
-        // UniformGrid.Rows 바인딩용. 0 = 자동. Grid2x2/3x3/4x4 는 rows 도 고정해서
-        // 스트림 수가 모자라도 surface 가 같은 격자로 분할되도록 한다.
-        public int GridRows => _layout switch
-        {
-            LayoutMode.Grid2x2 => 2,
-            LayoutMode.Grid3x3 => 3,
-            LayoutMode.Grid4x4 => 4,
-            _ => 0
-        };
 
         public int TotalCount => Streams.Count;
 

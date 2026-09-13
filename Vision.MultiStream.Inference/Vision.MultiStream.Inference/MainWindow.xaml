@@ -3,7 +3,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:vm="clr-namespace:Vision.MultiStream.Inference.ViewModels"
         xmlns:models="clr-namespace:Vision.MultiStream.Inference.Models"
         mc:Ignorable="d"
@@ -11,12 +10,6 @@
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
-
-        <ObjectDataProvider x:Key="LayoutModes" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
-            <ObjectDataProvider.MethodParameters>
-                <x:Type TypeName="vm:LayoutMode"/>
-            </ObjectDataProvider.MethodParameters>
-        </ObjectDataProvider>
     </Window.Resources>
 
     <Grid>
@@ -263,14 +256,10 @@
 
                 <!-- 우: 타일 그리드 -->
                 <DockPanel Grid.Column="2">
-                    <!-- 상단 툴바: 레이아웃 선택 + VLM 디바이스(앱 전역) -->
+                    <!-- 상단 툴바: VLM 디바이스(앱 전역) -->
                     <Border DockPanel.Dock="Top" Background="#EEE" Padding="8,4" Margin="0,0,0,8">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="레이아웃:" VerticalAlignment="Center"/>
-                            <ComboBox Width="120" Margin="6,0,0,0"
-                                      ItemsSource="{Binding Source={StaticResource LayoutModes}}"
-                                      SelectedItem="{Binding Layout}"/>
-                            <TextBlock Text="VLM 디바이스(전체):" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                            <TextBlock Text="VLM 디바이스(전체):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <RadioButton Content="CPU" GroupName="VlmDevice" VerticalAlignment="Center"
                                          IsChecked="{Binding VlmUseCpu}"
                                          ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
@@ -289,7 +278,8 @@
                     <ItemsControl ItemsSource="{Binding Streams}" Background="Transparent">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <UniformGrid Columns="{Binding GridColumns}" Rows="{Binding GridRows}"/>
+                                <!-- Columns/Rows 미지정 = 자동 정사각 분할(ceil(sqrt(N))). 컴포지터 RecomputeLayout 과 같은 규칙. -->
+                                <UniformGrid/>
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
