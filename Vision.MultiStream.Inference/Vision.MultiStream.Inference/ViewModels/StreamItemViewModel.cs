@@ -60,11 +60,9 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _name;
         private string _rtspUrl;
         private InferenceDevice _device;
-        private readonly StreamRenderMode _renderMode;
-        // 모드에서 파생: GPU+컴포지터면 HW 디코딩, CPU/GPU+컴포지터면 컴포지터 표시, 개별(비트맵)이면 CPU 그리기.
-        private readonly bool _useHardwareDecoding;
-        private readonly bool _useCompositor;
-        private readonly bool _useBitmapDisplay;
+        // 생성 시 고정. 디코딩(SW/HW)과 표시기(개별 비트맵/개별 D3D/컴포지터)는 독립된 두 축이다.
+        private readonly DecodeMode _decodeMode;
+        private readonly DisplayMode _displayMode;
         // 개별(D3D) 표시기 초기화/그리기 실패. 폴백 없이 이 스트림을 재시작할 때까지 표시를 멈춘다.
         // UI 스레드(DrainYuvDisplayFrame)가 쓰고 렌더 스레드(OnYuvFrameCapturedForIndividual)가 읽는다.
         private volatile bool _displayFailed;
@@ -123,16 +121,23 @@ namespace Vision.MultiStream.Inference.ViewModels
             Func<InferenceDevice, IRtspFrameDetector> detectorResolver,
             Action<StreamItemViewModel> onRemoveRequested,
             bool initialInferenceEnabled = true,
-            StreamRenderMode renderMode = StreamRenderMode.CpuIndividual,
+            DecodeMode decodeMode = DecodeMode.Software,
+            DisplayMode displayMode = DisplayMode.IndividualD3D,
             bool initialVlmEnabled = true)
         {
             _name = name;
             _rtspUrl = rtspUrl;
             _device = device;
-            _renderMode = renderMode;
-            _useHardwareDecoding = renderMode == StreamRenderMode.GpuCompositor;
-            _useCompositor = renderMode == StreamRenderMode.CpuCompositor || renderMode == StreamRenderMode.GpuCompositor;
-            _useBitmapDisplay = renderMode == StreamRenderMode.CpuIndividualBitmap;
+            _decodeMode = decodeMode;
+            // HW 디코딩은 현재 컴포지터 표시기만 지원(UI 에서도 막음). 방어적으로 컴포지터로 고정한다.
+            if (decodeMode == DecodeMode.Hardware)
+            {
+                _displayMode = DisplayMode.Compositor;
+            }
+            else
+            {
+                _displayMode = displayMode;
+            }
             _isInferenceEnabled = initialInferenceEnabled;
             _isVlmEnabled = initialVlmEnabled;
             _detectorResolver = detectorResolver;
@@ -250,14 +255,19 @@ namespace Vision.MultiStream.Inference.ViewModels
             _ => "CPU"
         };
 
-        // 표시/디코딩 모드 배지. 생성 후 변경 불가(읽기 전용).
-        public bool UseHardwareDecoding => _useHardwareDecoding;
-        public StreamRenderMode RenderMode => _renderMode;
-        public string DecoderLabel => _renderMode switch
+        // 디코딩·표시기 배지(예: "SW·개별(D3D)", "HW·컴포지터"). 생성 후 변경 불가.
+        public string DecodeDisplayLabel => $"{DecodeLabel}·{DisplayLabel}";
+
+        private string DecodeLabel => _decodeMode switch
         {
-            StreamRenderMode.GpuCompositor => "컴포지터(GPU)",
-            StreamRenderMode.CpuCompositor => "컴포지터(CPU)",
-            StreamRenderMode.CpuIndividualBitmap => "개별(비트맵)",
+            DecodeMode.Hardware => "HW",
+            _ => "SW"
+        };
+
+        private string DisplayLabel => _displayMode switch
+        {
+            DisplayMode.IndividualBitmap => "개별(비트맵)",
+            DisplayMode.Compositor => "컴포지터",
             _ => "개별(D3D)"
         };
 
@@ -752,7 +762,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                 // 컴포지터 모드이고 컴포지터가 붙어 있을 때만 슬롯 등록(프레임 도착 전에) + 레이아웃 재계산.
                 // 개별 모드는 컴포지터가 있어도 슬롯을 잡지 않고 per-stream 경로로 간다.
-                if (_useCompositor && _compositor != null)
+                if (_displayMode == DisplayMode.Compositor && _compositor != null)
                 {
                     _compositorSlot = _compositor.RegisterStream();
                     CompositorSlotChanged?.Invoke();
@@ -761,8 +771,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _source = new RtspFrameSource(RtspUrl);
                 _source.ReaderFramesEnabled = _isInferenceEnabled;
                 // 표시 경로 선택(생성 시 고정): 렌더러가 이 두 값으로 모드에 맞는 표시 이벤트 하나만 발행한다.
-                _source.UseBitmapDisplay = _useBitmapDisplay;
-                _source.UseCompositorDisplay = _useCompositor;
+                _source.UseBitmapDisplay = _displayMode == DisplayMode.IndividualBitmap;
+                _source.UseCompositorDisplay = _displayMode == DisplayMode.Compositor;
                 _source.StatusChanged += OnSourceStatusChanged;
                 _source.BgrIndividualFrameCaptured += OnBgrFrameCapturedForIndividual;
                 _source.YuvFrameCaptured += OnYuvFrameCapturedForCompositor;
@@ -776,7 +786,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                     IsMuted = !_isAudioEnabled
                 };
                 _audioOutput = audioOutput;
-                _source.Start(audioOutput, _useHardwareDecoding);
+                _source.Start(audioOutput, _decodeMode == DecodeMode.Hardware);
 
                 if (_isInferenceEnabled)
                 {
@@ -1111,11 +1121,11 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
             catch (Exception ex)
             {
-                // 폴백 없음. D3D 없이 표시하려면 'CPU+개별(비트맵)' 모드를 사용한다.
+                // 폴백 없음. D3D 없이 표시하려면 SW 디코딩 + '개별(비트맵)' 표시기를 사용한다.
                 // 매 프레임 D3D9 장치를 다시 만들며 반복 실패하지 않도록 재시작 전까지 표시를 멈춘다.
                 Debug.WriteLine($"[D3DImageYuvPresenter] 표시 실패: {ex}");
                 _displayFailed = true;
-                StatusMessage = $"표시 실패(D3D): {ex.Message} — 'CPU+개별(비트맵)' 모드 사용";
+                StatusMessage = $"표시 실패(D3D): {ex.Message} — '개별(비트맵)' 표시기 사용";
                 _d3dPresenter?.Dispose();
                 _d3dPresenter = null;
             }

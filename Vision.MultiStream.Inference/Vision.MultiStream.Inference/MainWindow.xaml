@@ -84,23 +84,32 @@
                                     <TextBox  Grid.Row="1" Grid.Column="1"
                                               Text="{Binding NewRtspUrl, UpdateSourceTrigger=PropertyChanged}"/>
                                 </Grid>
-                                <!-- 표시(영상) 행: 좁아지면 아래로 wrap -->
+                                <!-- 디코딩 행 -->
                                 <WrapPanel Margin="0,6,0,0">
-                                    <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <RadioButton Content="CPU+개별(비트맵)" IsChecked="{Binding NewModeCpuIndividualBitmap}" GroupName="NewRenderMode" Margin="0,0,0,2"
-                                            VerticalAlignment="Center"
-                                            ToolTip="SW 디코딩 + WriteableBitmap 으로 CPU 그리기 (D3D 를 쓸 수 없는 PC 용, 가장 느림)"/>
-                                    <RadioButton Content="CPU+개별(D3D)" IsChecked="{Binding NewModeCpuIndividual}" GroupName="NewRenderMode"
-                                            VerticalAlignment="Center" Margin="8,0,0,2"
-                                            ToolTip="SW 디코딩 + 스트림별 D3D9 셰이더로 표시"/>
-                                    <RadioButton Content="CPU+컴포지터" IsChecked="{Binding NewModeCpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,2"
+                                    <TextBlock Text="디코딩:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="SW" IsChecked="{Binding NewDecodeSoftware}" GroupName="NewDecodeMode" Margin="0,0,0,2"
+                                                 VerticalAlignment="Center"
+                                                 ToolTip="CPU(FFmpeg) 소프트웨어 디코딩"/>
+                                    <RadioButton Content="HW" IsChecked="{Binding NewDecodeHardware}" GroupName="NewDecodeMode" Margin="8,0,0,2"
                                                  VerticalAlignment="Center"
                                                  IsEnabled="{Binding IsCompositorAvailable}"
-                                                 ToolTip="SW 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
-                                    <RadioButton Content="GPU+컴포지터" IsChecked="{Binding NewModeGpuCompositor}" GroupName="NewRenderMode" Margin="8,0,0,2"
+                                                 ToolTip="GPU(D3D11VA) 하드웨어 디코딩 — 현재 컴포지터 표시기만 가능"/>
+                                </WrapPanel>
+                                <!-- 표시기 행: 좁아지면 아래로 wrap -->
+                                <WrapPanel Margin="0,6,0,0">
+                                    <TextBlock Text="표시기:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <RadioButton Content="개별(비트맵)" IsChecked="{Binding NewDisplayIndividualBitmap}" GroupName="NewDisplayMode" Margin="0,0,0,2"
+                                                 VerticalAlignment="Center"
+                                                 IsEnabled="{Binding IsIndividualDisplayAvailable}"
+                                                 ToolTip="스트림별 WriteableBitmap 에 CPU 로 그리기 (D3D 를 쓸 수 없는 PC 용, 가장 느림)"/>
+                                    <RadioButton Content="개별(D3D)" IsChecked="{Binding NewDisplayIndividualD3D}" GroupName="NewDisplayMode" Margin="8,0,0,2"
+                                                 VerticalAlignment="Center"
+                                                 IsEnabled="{Binding IsIndividualDisplayAvailable}"
+                                                 ToolTip="스트림별 D3D9 셰이더로 표시"/>
+                                    <RadioButton Content="컴포지터" IsChecked="{Binding NewDisplayCompositor}" GroupName="NewDisplayMode" Margin="8,0,0,2"
                                                  VerticalAlignment="Center"
                                                  IsEnabled="{Binding IsCompositorAvailable}"
-                                                 ToolTip="HW(D3D11VA) 디코딩 + 단일 컴포지터 표시 (컴포지터 사용 가능 시)"/>
+                                                 ToolTip="단일 컴포지터가 전 스트림을 합성 (컴포지터 사용 가능 시)"/>
                                 </WrapPanel>
                                 <!-- 추론 행: 좁아지면 아래로 wrap -->
                                 <WrapPanel Margin="0,6,0,0">
@@ -196,10 +205,9 @@
                                                         </TextBlock>
                                                     </Border>
                                                     <Border Background="#1E5BAA" Padding="4,1" Margin="4,0,0,0" CornerRadius="2"
-                                                            ToolTip="표시 모드 (개별/컴포지터)">
+                                                            ToolTip="디코딩·표시기">
                                                         <TextBlock Foreground="White" FontSize="10">
-                                                            <Run Text="표시:"/>
-                                                            <Run Text="{Binding DecoderLabel, Mode=OneWay}" FontWeight="Bold"/>
+                                                            <Run Text="{Binding DecodeDisplayLabel, Mode=OneWay}" FontWeight="Bold"/>
                                                         </TextBlock>
                                                     </Border>
                                                 </StackPanel>
@@ -382,9 +390,8 @@
                                                 </TextBlock>
                                                 <TextBlock Foreground="#88CCFF" FontSize="11"
                                                            DockPanel.Dock="Left" Margin="6,0,0,0" VerticalAlignment="Center"
-                                                           ToolTip="디코더 (SW/HW)">
-                                                    <Run Text="디코더:"/>
-                                                    <Run Text="{Binding DecoderLabel, Mode=OneWay}" FontWeight="Bold"/>
+                                                           ToolTip="디코딩·표시기">
+                                                    <Run Text="{Binding DecodeDisplayLabel, Mode=OneWay}" FontWeight="Bold"/>
                                                 </TextBlock>
                                                 <TextBlock Text="{Binding StatusMessage}" Foreground="#AAA" FontSize="11"
                                                            DockPanel.Dock="Left" Margin="8,0,0,0" VerticalAlignment="Center"

@@ -74,7 +74,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             set => _settings.ReaderFramesEnabled = value;
         }
 
-        // true = CPU+개별(비트맵) 표시(BgrIndividualFrameCaptured 발행). false = YUV 표시(컴포지터/개별 D3D).
+        // true = 개별(비트맵) 표시기(BgrIndividualFrameCaptured 발행). false = YUV 표시(컴포지터/개별 D3D).
         public bool UseBitmapDisplay
         {
             get => _settings.UseBitmapDisplay;

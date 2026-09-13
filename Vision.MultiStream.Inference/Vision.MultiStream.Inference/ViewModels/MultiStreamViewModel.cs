@@ -13,14 +13,17 @@ using Vision.MultiStream.Inference.Views;
 namespace Vision.MultiStream.Inference.ViewModels
 {
     /// <summary>
-    /// 스트림 표시/디코딩 방식.
-    ///   - CpuIndividual       : SW 디코딩 + 개별 표시, D3D9 셰이더로 그리기(D3DImageYuvPresenter).
-    ///   - CpuIndividualBitmap : SW 디코딩 + 개별 표시, WriteableBitmap 으로 CPU 그리기(D3D 불필요).
-    ///   - CpuCompositor : SW 디코딩 + 단일 컴포지터 표시.
-    ///   - GpuCompositor : HW(D3D11VA) 디코딩 + 단일 컴포지터 표시.
-    /// 컴포지터 두 모드는 GPU/컴포지터가 있어야 선택 가능하다.
+    /// 영상 디코딩 장치. Hardware = D3D11VA(GPU). 현재 Hardware 는 컴포지터 표시기와만 조합 가능.
     /// </summary>
-    public enum StreamRenderMode { CpuIndividual, CpuIndividualBitmap, CpuCompositor, GpuCompositor }
+    public enum DecodeMode { Software, Hardware }
+
+    /// <summary>
+    /// 화면 표시기.
+    ///   - IndividualBitmap : 스트림별 WriteableBitmap 에 CPU 로 그리기(D3D 불필요).
+    ///   - IndividualD3D    : 스트림별 D3D9 셰이더로 그리기(D3DImageYuvPresenter).
+    ///   - Compositor       : 단일 StreamCompositor 가 전 스트림을 합성.
+    /// </summary>
+    public enum DisplayMode { IndividualBitmap, IndividualD3D, Compositor }
 
     /// <summary>
     /// 다중 RTSP 스트림 관리 ViewModel.
@@ -36,7 +39,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
         private bool _newUseInference = true;
         // 컴포지터가 없으면(GPU 없음) 기본값은 개별. AttachCompositor 시 컴포지터 모드로 올린다.
-        private StreamRenderMode _newRenderMode = StreamRenderMode.CpuIndividual;
+        private DecodeMode _newDecodeMode = DecodeMode.Software;
+        private DisplayMode _newDisplayMode = DisplayMode.IndividualD3D;
         private int _autoCounter = 1;
         private StreamCompositor? _compositor;
 
@@ -98,7 +102,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             RecomputeLayout();
         }
 
-        // 컴포지터가 만들어졌는지(=CPU+컴포지터 / GPU+컴포지터 선택 가능 여부). 라디오 IsEnabled 바인딩용.
+        // 컴포지터가 만들어졌는지(= 컴포지터 표시기 / HW 디코딩 선택 가능 여부). 라디오 IsEnabled 바인딩용.
         public bool IsCompositorAvailable => _compositor != null;
 
         // 스트림 추가 시 컴포지터 연결 + 슬롯 변경 이벤트 구독.
@@ -326,72 +330,108 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        // 표시/디코딩 모드 선택 라디오 3종. 컴포지터 두 모드는 IsCompositorAvailable 일 때만 켤 수 있다.
-        public StreamRenderMode NewRenderMode
+        // 디코딩 라디오. HW 로 바꾸면 개별 표시기는 쓸 수 없으므로 표시기를 컴포지터로 자동 전환한다.
+        public DecodeMode NewDecodeMode
         {
-            get => _newRenderMode;
+            get => _newDecodeMode;
             set
             {
-                if (_newRenderMode == value)
+                if (_newDecodeMode == value)
                 {
                     return;
                 }
-                _newRenderMode = value;
+                _newDecodeMode = value;
+                if (value == DecodeMode.Hardware)
+                {
+                    NewDisplayMode = DisplayMode.Compositor;
+                }
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(NewModeCpuIndividual));
-                OnPropertyChanged(nameof(NewModeCpuIndividualBitmap));
-                OnPropertyChanged(nameof(NewModeCpuCompositor));
-                OnPropertyChanged(nameof(NewModeGpuCompositor));
+                OnPropertyChanged(nameof(NewDecodeSoftware));
+                OnPropertyChanged(nameof(NewDecodeHardware));
+                OnPropertyChanged(nameof(IsIndividualDisplayAvailable));
             }
         }
 
-        public bool NewModeCpuIndividual
+        public bool NewDecodeSoftware
         {
-            get => _newRenderMode == StreamRenderMode.CpuIndividual;
+            get => _newDecodeMode == DecodeMode.Software;
             set
             {
                 if (value)
                 {
-                    NewRenderMode = StreamRenderMode.CpuIndividual;
+                    NewDecodeMode = DecodeMode.Software;
                 }
             }
         }
 
-        public bool NewModeCpuIndividualBitmap
+        public bool NewDecodeHardware
         {
-            get => _newRenderMode == StreamRenderMode.CpuIndividualBitmap;
+            get => _newDecodeMode == DecodeMode.Hardware;
             set
             {
                 if (value)
                 {
-                    NewRenderMode = StreamRenderMode.CpuIndividualBitmap;
+                    NewDecodeMode = DecodeMode.Hardware;
                 }
             }
         }
 
-        public bool NewModeCpuCompositor
+        // 표시기 라디오.
+        public DisplayMode NewDisplayMode
         {
-            get => _newRenderMode == StreamRenderMode.CpuCompositor;
+            get => _newDisplayMode;
+            set
+            {
+                if (_newDisplayMode == value)
+                {
+                    return;
+                }
+                _newDisplayMode = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(NewDisplayIndividualBitmap));
+                OnPropertyChanged(nameof(NewDisplayIndividualD3D));
+                OnPropertyChanged(nameof(NewDisplayCompositor));
+            }
+        }
+
+        public bool NewDisplayIndividualBitmap
+        {
+            get => _newDisplayMode == DisplayMode.IndividualBitmap;
             set
             {
                 if (value)
                 {
-                    NewRenderMode = StreamRenderMode.CpuCompositor;
+                    NewDisplayMode = DisplayMode.IndividualBitmap;
                 }
             }
         }
 
-        public bool NewModeGpuCompositor
+        public bool NewDisplayIndividualD3D
         {
-            get => _newRenderMode == StreamRenderMode.GpuCompositor;
+            get => _newDisplayMode == DisplayMode.IndividualD3D;
             set
             {
                 if (value)
                 {
-                    NewRenderMode = StreamRenderMode.GpuCompositor;
+                    NewDisplayMode = DisplayMode.IndividualD3D;
                 }
             }
         }
+
+        public bool NewDisplayCompositor
+        {
+            get => _newDisplayMode == DisplayMode.Compositor;
+            set
+            {
+                if (value)
+                {
+                    NewDisplayMode = DisplayMode.Compositor;
+                }
+            }
+        }
+
+        // 개별 표시기(비트맵/D3D) 선택 가능 여부. HW 디코딩은 현재 컴포지터 표시기만 지원한다.
+        public bool IsIndividualDisplayAvailable => _newDecodeMode == DecodeMode.Software;
 
         // [Step 7] VLM 묘사 디바이스 전역 토글(GPU/CPU). Ollama 단일 모델 로드라 앱 공통.
         // 상단 툴바 라디오 2개(GPU/CPU)에 바인딩. 전 스트림 공통, 다음 VLM 호출부터 적용(모델 재로딩 ~1분 발생 가능).
@@ -427,7 +467,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newDecodeMode, _newDisplayMode);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -448,7 +488,8 @@ namespace Vision.MultiStream.Inference.ViewModels
 
             InferenceDevice device = dialog.SelectedDevice;
             bool inferenceEnabled = dialog.SelectedInferenceEnabled;
-            StreamRenderMode renderMode = dialog.SelectedRenderMode;
+            DecodeMode decodeMode = dialog.SelectedDecodeMode;
+            DisplayMode displayMode = dialog.SelectedDisplayMode;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -456,15 +497,15 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, decodeMode, displayMode));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
         // VLM 은 부하가 크므로 기본 OFF 로 추가하고, 필요한 스트림만 💬 토글(또는 전체 VLM ON)로 켠다.
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode)
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, DecodeMode decodeMode, DisplayMode displayMode)
         {
-            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode, initialVlmEnabled: false);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, decodeMode, displayMode, initialVlmEnabled: false);
             WireStream(item);
             return item;
         }

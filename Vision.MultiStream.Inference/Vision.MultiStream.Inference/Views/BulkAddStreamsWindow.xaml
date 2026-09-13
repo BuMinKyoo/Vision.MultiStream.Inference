@@ -47,19 +47,25 @@
                           ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <RadioButton x:Name="CpuIndividualBitmapRadio" Content="CPU+개별(비트맵)" GroupName="RenderMode"
+                <TextBlock Text="디코딩:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <RadioButton x:Name="DecodeSwRadio" Content="SW" GroupName="DecodeMode" IsChecked="True"
+                             VerticalAlignment="Center" Checked="OnDecodeModeChanged"
+                             ToolTip="CPU(FFmpeg) 소프트웨어 디코딩"/>
+                <RadioButton x:Name="DecodeHwRadio" Content="HW" GroupName="DecodeMode" Margin="8,0,0,0"
+                             VerticalAlignment="Center" Checked="OnDecodeModeChanged"
+                             ToolTip="GPU(D3D11VA) 하드웨어 디코딩 — 현재 컴포지터 표시기만 가능"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <TextBlock Text="표시기:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <RadioButton x:Name="DisplayBitmapRadio" Content="개별(비트맵)" GroupName="DisplayMode"
                              VerticalAlignment="Center"
-                             ToolTip="SW 디코딩 + WriteableBitmap 으로 CPU 그리기 (D3D 를 쓸 수 없는 PC 용)"/>
-                <RadioButton x:Name="CpuIndividualRadio" Content="CPU+개별(D3D)" GroupName="RenderMode" IsChecked="True" Margin="8,0,0,0"
+                             ToolTip="스트림별 WriteableBitmap 에 CPU 로 그리기 (D3D 를 쓸 수 없는 PC 용)"/>
+                <RadioButton x:Name="DisplayD3DRadio" Content="개별(D3D)" GroupName="DisplayMode" IsChecked="True" Margin="8,0,0,0"
                              VerticalAlignment="Center"
-                             ToolTip="SW 디코딩 + 스트림별 D3D9 셰이더로 표시"/>
-                <RadioButton x:Name="CpuCompositorRadio" Content="CPU+컴포지터" GroupName="RenderMode" Margin="8,0,0,0"
+                             ToolTip="스트림별 D3D9 셰이더로 표시"/>
+                <RadioButton x:Name="DisplayCompositorRadio" Content="컴포지터" GroupName="DisplayMode" Margin="8,0,0,0"
                              VerticalAlignment="Center"
-                             ToolTip="SW 디코딩 + 단일 컴포지터 표시"/>
-                <RadioButton x:Name="GpuCompositorRadio" Content="GPU+컴포지터" GroupName="RenderMode" Margin="8,0,0,0"
-                             VerticalAlignment="Center"
-                             ToolTip="HW(D3D11VA) 디코딩 + 단일 컴포지터 표시"/>
+                             ToolTip="단일 컴포지터가 전 스트림을 합성"/>
             </StackPanel>
         </StackPanel>
 

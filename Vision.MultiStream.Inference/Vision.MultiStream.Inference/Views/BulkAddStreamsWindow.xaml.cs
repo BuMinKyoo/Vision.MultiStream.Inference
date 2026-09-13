@@ -26,16 +26,35 @@ namespace Vision.MultiStream.Inference.Views
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
         public bool SelectedInferenceEnabled { get; private set; } = true;
-        public StreamRenderMode SelectedRenderMode { get; private set; } = StreamRenderMode.CpuIndividual;
+        public DecodeMode SelectedDecodeMode { get; private set; } = DecodeMode.Software;
+        public DisplayMode SelectedDisplayMode { get; private set; } = DisplayMode.IndividualD3D;
 
-        // 컴포지터가 없으면(GPU 없음) 컴포지터 모드 라디오를 비활성화. AddBulk 가 ShowDialog 전에 설정.
+        // 컴포지터가 없으면(GPU 없음) 컴포지터 표시기와 HW 디코딩(컴포지터 전용)을 비활성화. AddBulk 가 ShowDialog 전에 설정.
         public bool CompositorAvailable
         {
-            get => CpuCompositorRadio.IsEnabled;
+            get => DisplayCompositorRadio.IsEnabled;
             set
             {
-                CpuCompositorRadio.IsEnabled = value;
-                GpuCompositorRadio.IsEnabled = value;
+                DisplayCompositorRadio.IsEnabled = value;
+                DecodeHwRadio.IsEnabled = value;
+            }
+        }
+
+        // HW 디코딩은 현재 컴포지터 표시기만 지원 → HW 선택 시 개별 표시기를 막고 컴포지터로 전환.
+        // XAML 의 IsChecked="True" 가 InitializeComponent 중에 Checked 를 일으켜, 아직 생성 전인 라디오가 null 일 수 있다.
+        private void OnDecodeModeChanged(object sender, RoutedEventArgs e)
+        {
+            if (DecodeHwRadio == null || DisplayBitmapRadio == null || DisplayD3DRadio == null || DisplayCompositorRadio == null)
+            {
+                return;
+            }
+
+            bool hardware = DecodeHwRadio.IsChecked == true;
+            DisplayBitmapRadio.IsEnabled = !hardware;
+            DisplayD3DRadio.IsEnabled = !hardware;
+            if (hardware)
+            {
+                DisplayCompositorRadio.IsChecked = true;
             }
         }
 
@@ -75,21 +94,26 @@ namespace Vision.MultiStream.Inference.Views
 
             SelectedInferenceEnabled = InferenceCheck.IsChecked == true;
 
-            if (GpuCompositorRadio.IsChecked == true)
+            if (DecodeHwRadio.IsChecked == true)
             {
-                SelectedRenderMode = StreamRenderMode.GpuCompositor;
-            }
-            else if (CpuCompositorRadio.IsChecked == true)
-            {
-                SelectedRenderMode = StreamRenderMode.CpuCompositor;
-            }
-            else if (CpuIndividualBitmapRadio.IsChecked == true)
-            {
-                SelectedRenderMode = StreamRenderMode.CpuIndividualBitmap;
+                SelectedDecodeMode = DecodeMode.Hardware;
             }
             else
             {
-                SelectedRenderMode = StreamRenderMode.CpuIndividual;
+                SelectedDecodeMode = DecodeMode.Software;
+            }
+
+            if (DisplayCompositorRadio.IsChecked == true)
+            {
+                SelectedDisplayMode = DisplayMode.Compositor;
+            }
+            else if (DisplayBitmapRadio.IsChecked == true)
+            {
+                SelectedDisplayMode = DisplayMode.IndividualBitmap;
+            }
+            else
+            {
+                SelectedDisplayMode = DisplayMode.IndividualD3D;
             }
 
             DialogResult = true;

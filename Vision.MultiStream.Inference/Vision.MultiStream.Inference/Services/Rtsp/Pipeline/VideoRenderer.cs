@@ -24,7 +24,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         }
 
         // SW 표시 경로가 WriteableBitmap(CPU 그리기)인지. true 면 YUV 표시 이벤트 대신 BGR 표시 이벤트를 발행한다.
-        // (CPU+개별(비트맵) 모드 전용. 컴포지터/개별(D3D) 과 동시에 쓰지 않는다.)
+        // (표시기 '개별(비트맵)' 전용. 컴포지터/개별(D3D) 과 동시에 쓰지 않는다.)
         public bool UseBitmapDisplay
         {
             get => _useBitmapDisplay;
@@ -56,7 +56,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         // 추론 채널이 비었을 때(직전 추론 프레임이 소비됨)만 true. HW readback(av_hwframe_transfer_data)은
         // 공유 D3D11 락을 쥔 채 GPU→CPU 복사를 하므로, 소비자가 못 따라오면 이 게이트로 readback 자체를 건너뛴다.
         private readonly Func<bool> _inferenceReady;
-        // CPU+개별(비트맵) 표시용 BGR 프레임 발행. 구독자가 받으면 true(소유권 이전), 없으면 false.
+        // 개별(비트맵) 표시기용 BGR 프레임 발행. 구독자가 받으면 true(소유권 이전), 없으면 false.
         private readonly Func<RtspFrame, bool> _raiseBgrIndividualCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvIndividualCaptured;
@@ -309,7 +309,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             int h = frame->height;
             var capturedAt = DateTime.UtcNow;
 
-            // CPU+개별(비트맵): BGR 로 변환해 표시 + (추론 ON 이면) 같은 변환 결과를 추론에도 사용.
+            // 개별(비트맵) 표시기: BGR 로 변환해 표시 + (추론 ON 이면) 같은 변환 결과를 추론에도 사용.
             if (_settings.UseBitmapDisplay)
             {
                 PresentBgrBitmap(frame, w, h, capturedAt, ptsSeconds);
@@ -349,7 +349,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             return true;
         }
 
-        // CPU+개별(비트맵) 전용: sws_scale 1회로 표시용 BGR(비관리 버퍼)을 만들고,
+        // 개별(비트맵) 표시기 전용: sws_scale 1회로 표시용 BGR(비관리 버퍼)을 만들고,
         // 추론이 켜져 있으면 같은 결과를 풀 버퍼로 복사해 추론 채널로도 보낸다.
         private void PresentBgrBitmap(AVFrame* frame, int w, int h, DateTime capturedAt, double ptsSeconds)
         {
