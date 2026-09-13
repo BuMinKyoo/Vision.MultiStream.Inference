@@ -3,10 +3,14 @@
   <!--
     Phase 4 CUDA 네이티브 DLL (vision_cuda.dll).
     x64 DynamicLibrary. C# WPF 프로젝트가 P/Invoke 로 호출한다.
-    빌드 설정 기준(이 PC 제약): CUDA 12.9 + MSVC 14.44(v143) + sm_61(P2000) + /utf-8.
-      - CUDA 13.2 는 sm_61(Pascal) 미지원 → 12.9 필수.
+    빌드 설정 기준: CUDA 12.9 + MSVC 14.44(v143) + sm_61(P2000) / sm_89(RTX 4060) + /utf-8.
+      - CUDA 13.x 는 sm_61(Pascal) 미지원 → P2000 도 지원하려고 12.9 유지.
       - MSVC 14.51(v145) 은 CUDA 12.9 cudafe++ 와 충돌 → PlatformToolset v143(=14.44)로 고정.
-    CUDA build customization(CUDA 12.9.props/.targets)은 VS2026 BuildCustomizations 에 복사해 둠.
+    CUDA build customization(CUDA 12.9.props/.targets)은 VS 폴더($(VCTargetsPath)\BuildCustomizations)가 아니라
+    CUDA Toolkit 설치 폴더(extras\visual_studio_integration\MSBuildExtensions)에서 직접 읽는다.
+      - CUDA 설치 프로그램은 자기가 아는 VS 버전(예: VS2022 v170)에만 연동 파일을 복사 → VS2026(v180)에는 없음.
+      - 환경변수 CUDA_PATH_V12_9(CUDA 설치 시 자동 등록)만 있으면 VS 버전과 무관하게 빌드된다.
+    CUDA 버전을 바꿀 때는 아래 CudaVersion 한 곳만 수정한다.
   -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -27,8 +31,14 @@
     <!-- v143 = MSVC 14.44 (CUDA 12.9 호환). VS2026 기본 v145(14.51)은 cudafe++ 충돌. -->
     <PlatformToolset>v143</PlatformToolset>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
-    <!-- 통합 파일을 수동 복사했으므로 CUDA 12.9 설치 경로를 명시(설치 시 자동 등록되는 값) -->
-    <CudaToolkitDir>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\</CudaToolkitDir>
+    <!-- 사용할 CUDA 버전 (연동 파일 이름 "CUDA 12.9.props" 와 환경변수 CUDA_PATH_V12_9 를 이 값으로 조합) -->
+    <CudaVersion>12.9</CudaVersion>
+    <!-- CUDA 설치 시 자동 등록되는 환경변수(CUDA_PATH_V12_9)에서 설치 경로를 읽는다 -->
+    <CudaPathEnvName>CUDA_PATH_V$(CudaVersion.Replace('.', '_'))</CudaPathEnvName>
+    <CudaToolkitDir>$([System.Environment]::GetEnvironmentVariable('$(CudaPathEnvName)'))</CudaToolkitDir>
+    <CudaToolkitDir Condition="'$(CudaToolkitDir)' != '' AND !HasTrailingSlash('$(CudaToolkitDir)')">$(CudaToolkitDir)\</CudaToolkitDir>
+    <!-- CUDA MSBuild 연동 파일(.props/.targets/.xml/CudaTasks.dll) 위치 -->
+    <CudaMsBuildExtDir>$(CudaToolkitDir)extras\visual_studio_integration\MSBuildExtensions\</CudaMsBuildExtDir>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -44,7 +54,7 @@
 
   <!-- CUDA build customization: .cu 를 CudaCompile 항목으로 인식 + nvcc 호출 규칙 주입 -->
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.props" />
+    <Import Project="$(CudaMsBuildExtDir)CUDA $(CudaVersion).props" Condition="Exists('$(CudaMsBuildExtDir)CUDA $(CudaVersion).props')" />
   </ImportGroup>
 
   <PropertyGroup>
@@ -64,8 +74,9 @@
     </ClCompile>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <!-- P2000 = Pascal. compute_61/sm_61 로 코드 생성 -->
-      <CodeGeneration>compute_61,sm_61</CodeGeneration>
+      <!-- GPU 아키텍처별 기계어를 한 DLL 에 함께 생성 (실행 시 GPU 에 맞는 코드 선택).
+           sm_61 = Quadro P2000(Pascal), sm_89 = RTX 4060(Ada). GPU 를 추가하면 ";compute_XX,sm_XX" 로 덧붙인다. -->
+      <CodeGeneration>compute_61,sm_61;compute_89,sm_89</CodeGeneration>
       <!-- nvcc 가 호스트(cl) 컴파일 시 한글 주석 처리 + 신버전 MSVC 경고 억제 -->
       <AdditionalOptions>-allow-unsupported-compiler -Wno-deprecated-gpu-targets -Xcompiler /utf-8 %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
@@ -85,6 +96,14 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.targets" />
+    <Import Project="$(CudaMsBuildExtDir)CUDA $(CudaVersion).targets" Condition="Exists('$(CudaMsBuildExtDir)CUDA $(CudaVersion).targets')" />
   </ImportGroup>
+
+  <!-- 연동 파일이 없으면 알아보기 어려운 MSB4019 대신 원인을 바로 알려준다 -->
+  <Target Name="CheckCudaMsBuildExt" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(CudaToolkitDir)'==''"
+           Text="환경변수 $(CudaPathEnvName) 가 없습니다. CUDA $(CudaVersion) Toolkit 을 설치하세요(설치 후 VS 재시작)." />
+    <Error Condition="!Exists('$(CudaMsBuildExtDir)CUDA $(CudaVersion).targets')"
+           Text="CUDA $(CudaVersion) MSBuild 연동 파일을 찾을 수 없습니다: $(CudaMsBuildExtDir)" />
+  </Target>
 </Project>

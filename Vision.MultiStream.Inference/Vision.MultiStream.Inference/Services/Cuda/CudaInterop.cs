@@ -5,7 +5,7 @@ namespace Vision.MultiStream.Inference.Services.Cuda
 {
     /// <summary>
     /// Phase 4 CUDA 네이티브 DLL(vision_cuda.dll) P/Invoke 브릿지.
-    /// DLL 은 Native/Vision.MultiStream.Cuda 프로젝트가 nvcc(CUDA 12.9, sm_61)로 빌드하고,
+    /// DLL 은 Native/Vision.MultiStream.Cuda 프로젝트가 nvcc(CUDA 12.9, sm_61/sm_89)로 빌드하고,
     /// csproj 의 CopyCudaInferDll 타깃이 출력 폴더로 복사한다(Gpu 빌드 전용).
     /// YOLOv8 전처리(letterbox + 정규화 + CHW)를 CUDA 커널로 실행하는 진입점을 노출한다.
     /// </summary>

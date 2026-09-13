@@ -182,9 +182,11 @@ fixed (float* pOut = _outputBuffer)
 
 | 항목 | 버전 / 비고 |
 |---|---|
-| OS | Windows 11 |
-| IDE | Visual Studio 2022 (C++ 워크로드 포함 — 네이티브 추론 DLL 빌드용) |
-| .NET SDK | .NET 10 (`net10.0-windows`) |
+| OS | Windows 11 (25H2, 빌드 26200) |
+| IDE | Visual Studio Community 2026 (18.7) + C++ 워크로드 — 네이티브/CUDA DLL 빌드용 |
+| MSVC 빌드 도구 | **v143 (14.44.35207)** — CUDA 12.9 호환 버전. VS 2022 (17.14) 설치로 제공 |
+| Windows SDK | 10.0.26100.0 |
+| .NET SDK | .NET 10 (10.0.301, `net10.0-windows`) |
 | 언어 | C# (Nullable enable, ImplicitUsings enable, AllowUnsafeBlocks) + 네이티브 C++ |
 | 플랫폼 | x64 강제 (FFmpeg 네이티브 DLL이 x64) |
 | UI | WPF (MVVM) |
@@ -193,7 +195,7 @@ fixed (float* pOut = _outputBuffer)
 
 | 패키지 | 용도 |
 |---|---|
-| `Microsoft.ML.OnnxRuntime.Gpu` / `Microsoft.ML.OnnxRuntime.DirectML` (1.20.1) | ONNX 추론. `UseDirectML` 토글로 둘 중 하나 선택 (§10) |
+| `Microsoft.ML.OnnxRuntime.Gpu` / `Microsoft.ML.OnnxRuntime.DirectML` (둘 다 1.20.1) | ONNX 추론. `UseDirectML` 토글로 둘 중 하나 선택 (§10) |
 | `SixLabors.ImageSharp` | 이미지 전처리 (리사이즈, 정규화, HWC→CHW) |
 | `OpenCvSharp4` / `OpenCvSharp4.runtime.win` | 보조 이미지 처리 (VLM 입력 JPEG 인코딩 등) |
 | `FFmpeg.AutoGen` (8.1.0) | RTSP 수신 + H.264/AAC 디코딩 P/Invoke 바인딩 |
@@ -201,6 +203,18 @@ fixed (float* pOut = _outputBuffer)
 | `NAudio` (2.2.1) | 디코딩된 PCM을 스피커로 출력 (WaveOut/BufferedWaveProvider) |
 
 > ORT 패키지 기본값은 `UseDirectML=false` → **`Microsoft.ML.OnnxRuntime.Gpu`(CUDA/TensorRT)** 이다. DirectML로 쓰려면 `UseDirectML=true` 로 전환한다 (§10).
+
+### NVIDIA 환경 (`UseDirectML=false` 빌드)
+
+| 구성 요소 | 버전 | 쓰는 곳 |
+|---|---|---|
+| GPU / 드라이버 | NVIDIA GeForce RTX 4060 Laptop (Ada, `sm_89`) / 576.02 | — |
+| CUDA Toolkit | **12.9** (V12.9.41) | `vision_cuda.dll` 빌드(nvcc) + ORT CUDA/TensorRT EP 런타임 |
+| cuDNN | **9.23.1** (CUDA 12.9 용) | ORT CUDA / TensorRT EP |
+| TensorRT | **10.5.0.18** | ORT TensorRT EP |
+
+> ORT Gpu 1.20.1 은 `cudart64_12` / `cudnn64_9` / `nvinfer_10` 을 로드한다 → CUDA **12.x** / cuDNN **9.x** / TensorRT **10.x** 계열이어야 한다.
+> `vision_cuda.dll` 은 `sm_61`(Quadro P2000) + `sm_89`(RTX 4060) 코드를 함께 생성한다. 다른 GPU 는 vcxproj `CodeGeneration` 에 추가.
 
 ### FFmpeg 네이티브 DLL
 
@@ -496,22 +510,32 @@ ORT의 DirectML 패키지와 Gpu(CUDA/TensorRT) 패키지는 같은 `onnxruntime
 
 ### Step 1. CUDA Toolkit 설치
 
-```
-winget install Nvidia.CUDA
-```
+**CUDA 12.9** 를 NVIDIA CUDA Toolkit Archive 에서 받아 설치한다. (`winget install Nvidia.CUDA` 는 최신 버전이 깔리므로 쓰지 않는다. CUDA 13.x 는 `sm_61` 미지원.)
 
-또는 NVIDIA 공식 사이트에서 직접 다운로드 후 설치 (~3GB).
+- 설치하면 `CUDA_PATH_V12_9` 환경변수가 자동 등록된다. vcxproj 는 이 값으로 Toolkit 과 VS 연동 파일
+  (`extras\visual_studio_integration\MSBuildExtensions`)을 찾으므로 **VS 폴더에 파일을 복사할 필요 없다.**
+- 설치 후 **Visual Studio 를 재시작**해야 새 환경변수를 읽는다.
+- CUDA 버전을 바꾸면 `Vision.MultiStream.Cuda.vcxproj` 의 `<CudaVersion>` 한 줄만 수정한다.
 
 ### Step 2. cuDNN 설치
 
-- Windows / x86_64 / Tarball 다운로드
-- 압축 해제 후 `bin/` DLL들을 CUDA 설치 경로에 복사
+- **cuDNN 9.23.1** Windows 설치 프로그램으로 설치 (CUDA 12 용)
+- 아래 DLL 폴더를 `PATH` 에 추가
 
 ```
-C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\vXX.X\bin\
+C:\Program Files\NVIDIA\CUDNN\v9.23\bin\12.9\x64
 ```
 
-### Step 3. csproj 토글 확인
+### Step 3. TensorRT 설치
+
+- **TensorRT 10.5.0.18** (Windows zip) 을 `C:\TensorRT\TensorRT-10.5.0.18` 에 압축 해제
+- `lib\` 폴더를 `PATH` 에 추가
+
+```
+C:\TensorRT\TensorRT-10.5.0.18\lib
+```
+
+### Step 4. csproj 토글 확인
 
 `UseDirectML=false`(기본값)인지 확인 (§10).
 
