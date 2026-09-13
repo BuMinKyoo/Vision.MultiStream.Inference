@@ -61,9 +61,13 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _rtspUrl;
         private InferenceDevice _device;
         private readonly StreamRenderMode _renderMode;
-        // 모드에서 파생: GPU+컴포지터면 HW 디코딩, 개별이 아니면 컴포지터 표시.
+        // 모드에서 파생: GPU+컴포지터면 HW 디코딩, CPU/GPU+컴포지터면 컴포지터 표시, 개별(비트맵)이면 CPU 그리기.
         private readonly bool _useHardwareDecoding;
         private readonly bool _useCompositor;
+        private readonly bool _useBitmapDisplay;
+        // 개별(D3D) 표시기 초기화/그리기 실패. 폴백 없이 이 스트림을 재시작할 때까지 표시를 멈춘다.
+        // UI 스레드(DrainYuvDisplayFrame)가 쓰고 렌더 스레드(OnYuvFrameCapturedForIndividual)가 읽는다.
+        private volatile bool _displayFailed;
         private bool _isVideoEnabled;
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
@@ -127,7 +131,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             _device = device;
             _renderMode = renderMode;
             _useHardwareDecoding = renderMode == StreamRenderMode.GpuCompositor;
-            _useCompositor = renderMode != StreamRenderMode.CpuIndividual;
+            _useCompositor = renderMode == StreamRenderMode.CpuCompositor || renderMode == StreamRenderMode.GpuCompositor;
+            _useBitmapDisplay = renderMode == StreamRenderMode.CpuIndividualBitmap;
             _isInferenceEnabled = initialInferenceEnabled;
             _isVlmEnabled = initialVlmEnabled;
             _detectorResolver = detectorResolver;
@@ -252,7 +257,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         {
             StreamRenderMode.GpuCompositor => "컴포지터(GPU)",
             StreamRenderMode.CpuCompositor => "컴포지터(CPU)",
-            _ => "개별"
+            StreamRenderMode.CpuIndividualBitmap => "개별(비트맵)",
+            _ => "개별(D3D)"
         };
 
         public bool UseCpu
@@ -754,11 +760,11 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                 _source = new RtspFrameSource(RtspUrl);
                 _source.ReaderFramesEnabled = _isInferenceEnabled;
-                _source.UseYuvDisplayFrames = true;
-                // 표시 경로 선택: 렌더러가 이 값으로 YuvFrameCaptured / YuvIndividualFrameCaptured 중 하나만 발행한다.
+                // 표시 경로 선택(생성 시 고정): 렌더러가 이 두 값으로 모드에 맞는 표시 이벤트 하나만 발행한다.
+                _source.UseBitmapDisplay = _useBitmapDisplay;
                 _source.UseCompositorDisplay = _useCompositor;
                 _source.StatusChanged += OnSourceStatusChanged;
-                _source.FrameCaptured += OnFrameCapturedForDisplay;
+                _source.BgrIndividualFrameCaptured += OnBgrFrameCapturedForIndividual;
                 _source.YuvFrameCaptured += OnYuvFrameCapturedForCompositor;
                 _source.YuvIndividualFrameCaptured += OnYuvFrameCapturedForIndividual;
                 _source.D3D11FrameCaptured += OnD3D11FrameCapturedForDisplay;
@@ -899,6 +905,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 DrainPendingDisplayFrames();
                 Interlocked.Exchange(ref _yuvDisplayPumpScheduled, 0);
                 Interlocked.Exchange(ref _latestYuvFrame, null)?.Dispose();
+                _displayFailed = false; // 재시작 시 개별(D3D) 표시를 다시 시도한다.
 
                 // 컴포지터 슬롯 해제 + 레이아웃 재계산 트리거.
                 if (_compositor != null && _compositorSlot >= 0)
@@ -914,7 +921,7 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                 if (_source != null)
                 {
-                    _source.FrameCaptured -= OnFrameCapturedForDisplay;
+                    _source.BgrIndividualFrameCaptured -= OnBgrFrameCapturedForIndividual;
                     _source.YuvFrameCaptured -= OnYuvFrameCapturedForCompositor;
                     _source.YuvIndividualFrameCaptured -= OnYuvFrameCapturedForIndividual;
                     _source.D3D11FrameCaptured -= OnD3D11FrameCapturedForDisplay;
@@ -992,17 +999,9 @@ namespace Vision.MultiStream.Inference.ViewModels
             _dispatcher.BeginInvoke(() => StatusMessage = message);
         }
 
-        private void OnFrameCapturedForDisplay(object? sender, RtspFrame frame)
+        // 개별(비트맵) 표시 경로 전용 핸들러. 렌더러가 비트맵 모드일 때만 이 이벤트로 발행하므로 내부 분기가 없다.
+        private void OnBgrFrameCapturedForIndividual(object? sender, RtspFrame frame)
         {
-            // 컴포지터(YUV) 가 표시를 맡고 있으면 BGR 프레임은 표시용으로 안 쓰고 폐기.
-            // (per-stream D3DImageYuvPresenter 폴백도 마찬가지.) BGR 은 추론 경로 전용이라
-            // 추론 데이터는 VideoRenderer 에서 별도 채널로 따로 보낸다.
-            if (_compositor != null || _d3dPresenter != null)
-            {
-                frame.Dispose();
-                return;
-            }
-
             using (PerfProbe.Measure("display.enqueue"))
             {
                 _displayFpsCounter.Tick(out double fps);
@@ -1016,7 +1015,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             _compositor = compositor;
         }
 
-        // HW(D3D11) 표시 프레임. GPU 텍스처라 per-stream 폴백 표시 경로가 없다 →
+        // HW(D3D11) 표시 프레임. GPU 텍스처라 개별 표시 경로가 없다 →
         // 컴포지터가 없으면 GPU ref 누수를 막기 위해 즉시 Dispose.
         private void OnD3D11FrameCapturedForDisplay(object? sender, RtspD3D11Frame frame)
         {
@@ -1074,6 +1073,13 @@ namespace Vision.MultiStream.Inference.ViewModels
         // _latestYuvFrame에 새 frame을 원자적으로 넣고, 그 자리에 있던 이전 값을 dropped로 돌려받는다.
         private void OnYuvFrameCapturedForIndividual(object? sender, RtspYuvFrame frame)
         {
+            // 표시기가 실패한 스트림은 재시작 전까지 프레임을 받자마자 반납한다.
+            if (_displayFailed)
+            {
+                frame.Dispose();
+                return;
+            }
+
             RtspYuvFrame? dropped = Interlocked.Exchange(ref _latestYuvFrame, frame);
             dropped?.Dispose();
             if (Interlocked.CompareExchange(ref _yuvDisplayPumpScheduled, 1, 0) == 0)
@@ -1105,14 +1111,13 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[D3DImageYuvPresenter] fallback to WriteableBitmap: {ex}");
-                if (_source != null)
-                {
-                    _source.UseYuvDisplayFrames = false;
-                }
+                // 폴백 없음. D3D 없이 표시하려면 'CPU+개별(비트맵)' 모드를 사용한다.
+                // 매 프레임 D3D9 장치를 다시 만들며 반복 실패하지 않도록 재시작 전까지 표시를 멈춘다.
+                Debug.WriteLine($"[D3DImageYuvPresenter] 표시 실패: {ex}");
+                _displayFailed = true;
+                StatusMessage = $"표시 실패(D3D): {ex.Message} — 'CPU+개별(비트맵)' 모드 사용";
                 _d3dPresenter?.Dispose();
                 _d3dPresenter = null;
-                _writeableBitmap = null;
             }
             finally
             {

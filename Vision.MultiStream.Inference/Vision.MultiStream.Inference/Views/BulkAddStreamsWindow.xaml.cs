@@ -83,6 +83,10 @@ namespace Vision.MultiStream.Inference.Views
             {
                 SelectedRenderMode = StreamRenderMode.CpuCompositor;
             }
+            else if (CpuIndividualBitmapRadio.IsChecked == true)
+            {
+                SelectedRenderMode = StreamRenderMode.CpuIndividualBitmap;
+            }
             else
             {
                 SelectedRenderMode = StreamRenderMode.CpuIndividual;

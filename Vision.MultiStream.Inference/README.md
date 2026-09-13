@@ -59,9 +59,9 @@ WPF (.NET 10) + ONNX Runtime 기반 **다중 RTSP 스트림 실시간 객체 검
 - **문제**: 디코드 스레드가 초당 수십 프레임을 그릴 때마다 `Dispatcher.BeginInvoke`를 던지면 UI 메시지 큐가 밀려, 영상은 끊기고 버튼 클릭도 늦어진다(스트림 N개면 폭증).
 - **해결**: 최신 프레임은 용량 1 채널에 넣되, **이미 예약된 UI 펌프가 없을 때만** 하나를 예약(`Interlocked.CompareExchange`)한다. UI 콜백은 큐에 쌓인 걸 **한 번에 비운다**(drain). 프레임이 아무리 자주 와도 UI 스레드에는 "처리 중이면 1건"만 걸린다.
 - **코드**: `ViewModels/StreamItemViewModel.cs`
-  - 예약 게이트: `:1103-1105` — `if (Interlocked.CompareExchange(ref _displayPumpScheduled, 1, 0) == 0) BeginInvoke(DrainDisplayFrames, DispatcherPriority.Render)`
-  - 드레인 + 재무장: `:1113-1138` (`DrainDisplayFrames`)
-  - YUV 표시 경로도 동일 패턴: `:1040-1044`, `:1050-1084`
+  - 예약 게이트(개별 비트맵): `EnqueueDisplayFrame` — `if (Interlocked.CompareExchange(ref _displayPumpScheduled, 1, 0) == 0) BeginInvoke(DrainDisplayFrames, DispatcherPriority.Render)`
+  - 드레인 + 재무장: `DrainDisplayFrames`
+  - 개별(D3D) YUV 표시 경로도 동일 패턴: `OnYuvFrameCapturedForIndividual` → `DrainYuvDisplayFrame`
 
 #### 0-6. P/Invoke (네이티브 경계)
 
@@ -330,16 +330,17 @@ Vision.MultiStream.Inference/                <-- 저장소 루트
 
 ## 4. 표시 경로 (개별 / 컴포지터 / 하드웨어 디코딩)
 
-스트림 추가 시 **표시 모드**를 3가지 중 고른다.
+스트림 추가 시 **표시 모드**를 4가지 중 고른다.
 
 | 표시 모드 | 디코딩 | 표시 |
 |---|---|---|
-| **CPU+개별** | SW (YUV420P) | 스트림마다 `D3DImageYuvPresenter` 1개 → 셀별 D3DImage |
+| **CPU+개별(D3D)** | SW (YUV420P) | 스트림마다 `D3DImageYuvPresenter` 1개 → 셀별 D3DImage |
+| **CPU+개별(비트맵)** | SW (→ BGR24) | 스트림마다 `WriteableBitmap` 에 CPU 로 그리기 (D3D 불필요, 가장 느림) |
 | **CPU+컴포지터** | SW (YUV420P) | 단일 `StreamCompositor` 가 전 스트림을 한 surface 에 합성 → D3DImage 1개 |
 | **GPU+컴포지터** | HW (D3D11VA, NV12) | HW 디코드 텍스처를 CPU 다운로드 없이 GPU 안에서 슬롯 텍스처로 복사 → 합성 |
 
 - **컴포지터**(`StreamCompositor`)는 D3D11 디바이스 하나로 여러 스트림을 타일 위치에 YUV→RGB 셰이더로 드로우해 공유 RT에 합성하고, UI는 프레임당 1회만 D3DImage present 한다. HW 디코더와 같은 D3D11 디바이스(`HwDeviceContext`)를 공유해 GPU 안에서 zero-copy로 처리한다.
-- 컴포지터 초기화(D3D9/D3D11)에 실패하면(GPU/드라이버 부재 등) 자동으로 per-stream `D3DImageYuvPresenter` 경로로 폴백하고, 그것도 실패하면 WriteableBitmap CPU 경로로 떨어진다.
+- **자동 폴백은 없다.** 컴포지터 초기화에 실패하면(GPU/드라이버 부재 등) 컴포지터 모드를 선택할 수 없고, 개별(D3D) 표시기가 실패하면 상태 메시지로 알린다. D3D 를 쓸 수 없는 PC(3D 가속 없는 VM 등)는 **CPU+개별(비트맵)** 을 고른다.
 
 ---
 
@@ -402,11 +403,11 @@ YOLO가 **사람(COCO class 0)** 을 검출한 프레임만 로컬 VLM에 넘겨
 ┌──────────────────────────┬──────────────────────────────────────┐
 │  스트림 추가 폼          │  VLM 디바이스: ○CPU ●GPU              │
 │   이름 / URL             │ ┌──────┬──────┬──────┐              │
-│   표시: 개별/컴포지터/GPU│ │ tile │ tile │ tile │              │
-│   추론: CPU/DML/CUDA/    │ ├──────┼──────┼──────┤              │
-│         TRT/C++  ☑추론   │ │ tile │ tile │ tile │              │
-│   [+ 추가] [📋 일괄]     │ └──────┴──────┴──────┘              │
-│                          │   UniformGrid 자동 N×N (배경=컴포지터)│
+│   표시: 개별(D3D/비트맵) │ │ tile │ tile │ tile │              │
+│         /컴포지터/GPU    │ ├──────┼──────┼──────┤              │
+│   추론: CPU/DML/CUDA/    │ │ tile │ tile │ tile │              │
+│         TRT/C++  ☑추론   │ └──────┴──────┴──────┘              │
+│   [+ 추가] [📋 일괄]     │   UniformGrid 자동 N×N (배경=컴포지터)│
 │──────────────────────────│                                      │
 │  스트림 목록             │  각 타일(오버레이):                   │
 │   ● cam1  추론:CPU 표시:개별│   상단바: 이름/추론/디코더/상태       │

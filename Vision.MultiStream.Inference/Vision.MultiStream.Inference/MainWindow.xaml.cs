@@ -28,9 +28,8 @@ namespace Vision.MultiStream.Inference
         {
             InitializeComponent();
 
-            // 윈도우 로드 후(HWND 확보 후) 컴포지터 생성. D3D9 실패(GPU/드라이버 부재 등) 시
-            // 컴포지터 없이 진행 → 각 스트림은 기존 per-stream D3DImage 경로(이쪽도 실패하면
-            // 추가로 WriteableBitmap CPU 경로) 로 자동 폴백.
+            // 윈도우 로드 후(HWND 확보 후) 컴포지터 생성. 실패(GPU/드라이버 부재 등) 시
+            // 컴포지터 없이 진행 → 컴포지터 모드 라디오가 비활성화되어 개별 모드(D3D/비트맵)만 선택 가능.
             Loaded += (_, _) =>
             {
                 try

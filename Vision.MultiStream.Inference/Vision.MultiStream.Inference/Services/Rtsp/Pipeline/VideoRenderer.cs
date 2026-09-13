@@ -14,7 +14,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
     public sealed class VideoRenderSettings
     {
         private volatile bool _readerFramesEnabled;
-        private volatile bool _useYuvDisplayFrames;
+        private volatile bool _useBitmapDisplay;
         private volatile bool _useCompositorDisplay;
 
         public bool ReaderFramesEnabled
@@ -23,10 +23,12 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             set => _readerFramesEnabled = value;
         }
 
-        public bool UseYuvDisplayFrames
+        // SW 표시 경로가 WriteableBitmap(CPU 그리기)인지. true 면 YUV 표시 이벤트 대신 BGR 표시 이벤트를 발행한다.
+        // (CPU+개별(비트맵) 모드 전용. 컴포지터/개별(D3D) 과 동시에 쓰지 않는다.)
+        public bool UseBitmapDisplay
         {
-            get => _useYuvDisplayFrames;
-            set => _useYuvDisplayFrames = value;
+            get => _useBitmapDisplay;
+            set => _useBitmapDisplay = value;
         }
 
         // 표시 경로 선택. true=컴포지터(YuvFrameCaptured), false=개별 per-stream(YuvIndividualFrameCaptured).
@@ -39,8 +41,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
     }
 
     /// <summary>
-    /// 파이프라인 3단계(비디오): 디코딩된 YUV 프레임을 받아 MediaClock 으로 페이싱한 뒤
-    /// (1) YUV 표시 프레임 발행, (2) sws_scale 로 BGR24 변환 후 표시/추론 출력을 만든다.
+    /// 파이프라인 3단계(비디오): 디코딩된 프레임을 받아 MediaClock 으로 페이싱한 뒤
+    /// (1) 표시 모드에 맞는 표시 프레임 하나(YUV / BGR / D3D11)를 발행하고, (2) 추론 ON 이면 BGR24 추론 프레임을 발행한다.
     /// 입력 프레임(AVFrame*)의 소유권을 가지므로 처리 후 av_frame_free 한다.
     /// </summary>
     internal sealed unsafe class VideoRenderer : IDisposable
@@ -54,7 +56,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         // 추론 채널이 비었을 때(직전 추론 프레임이 소비됨)만 true. HW readback(av_hwframe_transfer_data)은
         // 공유 D3D11 락을 쥔 채 GPU→CPU 복사를 하므로, 소비자가 못 따라오면 이 게이트로 readback 자체를 건너뛴다.
         private readonly Func<bool> _inferenceReady;
-        private readonly Func<RtspFrame, bool> _raiseFrameCaptured;
+        // CPU+개별(비트맵) 표시용 BGR 프레임 발행. 구독자가 받으면 true(소유권 이전), 없으면 false.
+        private readonly Func<RtspFrame, bool> _raiseBgrIndividualCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvCaptured;
         private readonly Action<RtspYuvFrame> _raiseYuvIndividualCaptured;
         private readonly Action<RtspD3D11Frame> _raiseD3D11Captured;
@@ -64,6 +67,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
         private int _knownW;
         private int _knownH;
         private int _dstBufSize;
+        private bool _warnedUnsupportedFormat;
         private Thread? _thread;
 
         public VideoRenderer(
@@ -73,7 +77,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             VideoRenderSettings settings,
             Action<RtspFrame> publishInference,
             Func<bool> inferenceReady,
-            Func<RtspFrame, bool> raiseFrameCaptured,
+            Func<RtspFrame, bool> raiseBgrIndividualCaptured,
             Action<RtspYuvFrame> raiseYuvCaptured,
             Action<RtspYuvFrame> raiseYuvIndividualCaptured,
             Action<RtspD3D11Frame> raiseD3D11Captured,
@@ -85,7 +89,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             _settings = settings;
             _publishInference = publishInference;
             _inferenceReady = inferenceReady;
-            _raiseFrameCaptured = raiseFrameCaptured;
+            _raiseBgrIndividualCaptured = raiseBgrIndividualCaptured;
             _raiseYuvCaptured = raiseYuvCaptured;
             _raiseYuvIndividualCaptured = raiseYuvIndividualCaptured;
             _raiseD3D11Captured = raiseD3D11Captured;
@@ -305,7 +309,15 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             int h = frame->height;
             var capturedAt = DateTime.UtcNow;
 
-            if (_settings.UseYuvDisplayFrames && IsYuv420Frame(frame))
+            // CPU+개별(비트맵): BGR 로 변환해 표시 + (추론 ON 이면) 같은 변환 결과를 추론에도 사용.
+            if (_settings.UseBitmapDisplay)
+            {
+                PresentBgrBitmap(frame, w, h, capturedAt, ptsSeconds);
+                return true;
+            }
+
+            // 컴포지터 / 개별(D3D): YUV420 셰이더 경로. 그 외 포맷은 표시하지 않는다(폴백 없음).
+            if (IsYuv420Frame(frame))
             {
                 using (PerfProbe.Measure("rtsp.yuv420.copy"))
                 {
@@ -322,14 +334,25 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                         _raiseYuvIndividualCaptured(yuv);
                     }
                 }
-
-                // 추론이 꺼져 있으면 BGR 변환은 건너뛴다.
-                if (!_settings.ReaderFramesEnabled)
-                {
-                    return true;
-                }
+            }
+            else if (!_warnedUnsupportedFormat)
+            {
+                _warnedUnsupportedFormat = true;
+                _onStatus($"표시 불가 픽셀 포맷: {(AVPixelFormat)frame->format}");
             }
 
+            // 추론: 표시와 무관하게 추론이 켜져 있을 때만 BGR 변환 후 발행(HW 경로와 같은 함수).
+            if (_settings.ReaderFramesEnabled)
+            {
+                EmitBgrForInference(frame, ptsSeconds);
+            }
+            return true;
+        }
+
+        // CPU+개별(비트맵) 전용: sws_scale 1회로 표시용 BGR(비관리 버퍼)을 만들고,
+        // 추론이 켜져 있으면 같은 결과를 풀 버퍼로 복사해 추론 채널로도 보낸다.
+        private void PresentBgrBitmap(AVFrame* frame, int w, int h, DateTime capturedAt, double ptsSeconds)
+        {
             // 첫 프레임 또는 해상도 변경 시 sws context 재할당.
             if (_swsCtx == null || w != _knownW || h != _knownH)
             {
@@ -375,7 +398,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
             {
                 using (PerfProbe.Measure("rtsp.frame_captured.invoke"))
                 {
-                    handedOff = _raiseFrameCaptured(displayFrame);
+                    handedOff = _raiseBgrIndividualCaptured(displayFrame);
                 }
 
                 if (managedForInference != null)
@@ -391,8 +414,6 @@ namespace Vision.MultiStream.Inference.Services.Rtsp.Pipeline
                     displayFrame.Dispose();
                 }
             }
-
-            return true;
         }
 
         private static bool IsYuv420Frame(AVFrame* frame)

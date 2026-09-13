@@ -74,10 +74,11 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
             set => _settings.ReaderFramesEnabled = value;
         }
 
-        public bool UseYuvDisplayFrames
+        // true = CPU+개별(비트맵) 표시(BgrIndividualFrameCaptured 발행). false = YUV 표시(컴포지터/개별 D3D).
+        public bool UseBitmapDisplay
         {
-            get => _settings.UseYuvDisplayFrames;
-            set => _settings.UseYuvDisplayFrames = value;
+            get => _settings.UseBitmapDisplay;
+            set => _settings.UseBitmapDisplay = value;
         }
 
         // true=컴포지터 표시 경로(YuvFrameCaptured 발행), false=개별 표시 경로(YuvIndividualFrameCaptured 발행).
@@ -88,7 +89,8 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
         }
 
         public event EventHandler<string>? StatusChanged;
-        public event EventHandler<RtspFrame>? FrameCaptured;
+        // 개별(비트맵) 표시 경로 전용 BGR 프레임.
+        public event EventHandler<RtspFrame>? BgrIndividualFrameCaptured;
         // 컴포지터 표시 경로 전용 YUV 프레임.
         public event EventHandler<RtspYuvFrame>? YuvFrameCaptured;
         // 개별(per-stream) 표시 경로 전용 YUV 프레임.
@@ -177,7 +179,7 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
                 videoRenderer = new VideoRenderer(
                     videoFrameQueue, info.VideoTimeBase, _clock, _settings,
                     PublishInferenceFrame, () => _channel.Reader.Count == 0,
-                    RaiseFrameCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
+                    RaiseBgrIndividualCaptured, RaiseYuvCaptured, RaiseYuvIndividualCaptured, RaiseD3D11Captured, RaiseStatus);
 
                 BlockingCollection<IntPtr>? audioPacketQueue = null;
                 BlockingCollection<AudioFrame>? audioFrameQueue = null;
@@ -337,9 +339,9 @@ namespace Vision.MultiStream.Inference.Services.Rtsp
 
         // VideoRenderer 가 호출. 구독자가 있으면 프레임을 넘긴 것으로 보고 true 반환
         // (구독자가 unmanaged 버퍼 해제를 책임진다). 구독자 없으면 false → 렌더러가 해제.
-        private bool RaiseFrameCaptured(RtspFrame frame)
+        private bool RaiseBgrIndividualCaptured(RtspFrame frame)
         {
-            EventHandler<RtspFrame>? handler = FrameCaptured;
+            EventHandler<RtspFrame>? handler = BgrIndividualFrameCaptured;
             if (handler == null)
             {
                 return false;

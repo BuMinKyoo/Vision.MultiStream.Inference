@@ -14,12 +14,13 @@ namespace Vision.MultiStream.Inference.ViewModels
 {
     /// <summary>
     /// 스트림 표시/디코딩 방식.
-    ///   - CpuIndividual : SW 디코딩 + per-stream 개별 표시(D3DImageYuvPresenter).
+    ///   - CpuIndividual       : SW 디코딩 + 개별 표시, D3D9 셰이더로 그리기(D3DImageYuvPresenter).
+    ///   - CpuIndividualBitmap : SW 디코딩 + 개별 표시, WriteableBitmap 으로 CPU 그리기(D3D 불필요).
     ///   - CpuCompositor : SW 디코딩 + 단일 컴포지터 표시.
     ///   - GpuCompositor : HW(D3D11VA) 디코딩 + 단일 컴포지터 표시.
     /// 컴포지터 두 모드는 GPU/컴포지터가 있어야 선택 가능하다.
     /// </summary>
-    public enum StreamRenderMode { CpuIndividual, CpuCompositor, GpuCompositor }
+    public enum StreamRenderMode { CpuIndividual, CpuIndividualBitmap, CpuCompositor, GpuCompositor }
 
     /// <summary>
     /// 다중 RTSP 스트림 관리 ViewModel.
@@ -338,6 +339,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                 _newRenderMode = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(NewModeCpuIndividual));
+                OnPropertyChanged(nameof(NewModeCpuIndividualBitmap));
                 OnPropertyChanged(nameof(NewModeCpuCompositor));
                 OnPropertyChanged(nameof(NewModeGpuCompositor));
             }
@@ -351,6 +353,18 @@ namespace Vision.MultiStream.Inference.ViewModels
                 if (value)
                 {
                     NewRenderMode = StreamRenderMode.CpuIndividual;
+                }
+            }
+        }
+
+        public bool NewModeCpuIndividualBitmap
+        {
+            get => _newRenderMode == StreamRenderMode.CpuIndividualBitmap;
+            set
+            {
+                if (value)
+                {
+                    NewRenderMode = StreamRenderMode.CpuIndividualBitmap;
                 }
             }
         }
