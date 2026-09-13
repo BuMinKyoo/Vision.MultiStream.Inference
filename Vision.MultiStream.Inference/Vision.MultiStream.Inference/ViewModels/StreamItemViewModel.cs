@@ -23,12 +23,13 @@ namespace Vision.MultiStream.Inference.ViewModels
     /// 멀티스트림에서 1개 RTSP 스트림을 표현하는 ViewModel.
     /// 책임: 자기 자신의 RtspFrameSource + 추론 루프 + 오디오 출력 수명 관리.
     ///
-    /// 세 개의 토글:
+    /// 네 개의 토글:
     ///   - IsVideoEnabled     : 비디오 디코딩 + 표시. 토글 시 RTSP 재구성.
     ///   - IsAudioEnabled     : 사운드카드 mute/unmute (비디오가 켜져 있을 때만 켤 수 있음 — 비디오에 종속, audio-only 모드 없음).
     ///                          오디오 디코더는 비디오 가동 중에는 항상 돌아가고 PTS 도 계속 push 됨 (audio-master 동기화 유지).
     ///                          토글은 사운드카드 볼륨만 0/1 로 바꿔 RTSP 재구성을 일으키지 않는다.
     ///   - IsInferenceEnabled : YOLO 추론 루프 ON/OFF (비디오가 켜져 있을 때만 의미 있음).
+    ///   - IsVlmEnabled       : VLM 장면 묘사 ON/OFF (추론 루프가 돌 때만 동작 — 추론에 종속).
     /// 비디오를 끄면 오디오도 함께 꺼진다.
     /// 추론 토글은 RTSP 를 건드리지 않고 추론 루프만 start/stop 한다.
     /// </summary>
@@ -37,7 +38,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private const int DisplayFrameQueueCapacity = 1;
 
         // [Step 7] 사람 검출 시 로컬 VLM(Ollama LLaVA)으로 장면을 묘사. COCO 'person' = 0.
-        // VLM on/off 는 스트림당 _useVlm 로 제어한다(추가 폼/일괄추가 창의 'VLM 사용' 체크박스).
+        // VLM on/off 는 스트림당 IsVlmEnabled(💬 토글)로 제어한다. CPU/GPU 는 앱 전역(OllamaVlmClient.UseGpu).
         private const int PersonClassId = 0;
         private static readonly TimeSpan VlmCooldown = TimeSpan.FromSeconds(10);
         private const string VlmModel = "qwen2.5vl:3b";
@@ -66,8 +67,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         private bool _isVideoEnabled;
         private bool _isAudioEnabled = true;
         private bool _isInferenceEnabled;
-        // 스트림당 VLM 묘사 사용 여부(추가 시 결정). false 면 이 스트림은 VLM 서비스를 띄우지 않는다.
-        private readonly bool _useVlm;
+        // 스트림당 VLM 묘사 사용 여부. false 면 추론이 돌아도 VLM 서비스를 띄우지 않는다.
+        private bool _isVlmEnabled;
         private string _statusMessage = "대기";
         private ImageSource? _imageSource;
         private WriteableBitmap? _writeableBitmap;
@@ -128,7 +129,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             _useHardwareDecoding = renderMode == StreamRenderMode.GpuCompositor;
             _useCompositor = renderMode != StreamRenderMode.CpuIndividual;
             _isInferenceEnabled = initialInferenceEnabled;
-            _useVlm = initialVlmEnabled;
+            _isVlmEnabled = initialVlmEnabled;
             _detectorResolver = detectorResolver;
             _onRemoveRequested = onRemoveRequested;
             _dispatcher = Application.Current.Dispatcher;
@@ -136,6 +137,7 @@ namespace Vision.MultiStream.Inference.ViewModels
             ToggleVideoCommand = new RelayCommand(ToggleVideo, () => !string.IsNullOrWhiteSpace(RtspUrl));
             ToggleAudioCommand = new RelayCommand(ToggleAudio, () => _isVideoEnabled);
             ToggleInferenceCommand = new RelayCommand(ToggleInference);
+            ToggleVlmCommand = new RelayCommand(ToggleVlm);
             StartCommand = new RelayCommand(StartAll, () => !string.IsNullOrWhiteSpace(RtspUrl));
             StopCommand = new RelayCommand(StopAll, () => IsActive);
             RemoveCommand = new RelayCommand(() =>
@@ -180,6 +182,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         public RelayCommand ToggleVideoCommand { get; }
         public RelayCommand ToggleAudioCommand { get; }
         public RelayCommand ToggleInferenceCommand { get; }
+        public RelayCommand ToggleVlmCommand { get; }
         public RelayCommand StartCommand { get; }
         public RelayCommand StopCommand { get; }
         public RelayCommand RemoveCommand { get; }
@@ -357,6 +360,8 @@ namespace Vision.MultiStream.Inference.ViewModels
                 OnPropertyChanged();
             }
         }
+
+        public bool IsVlmEnabled => _isVlmEnabled;
 
         public bool IsActive => _isVideoEnabled || _isAudioEnabled;
 
@@ -619,6 +624,32 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
+        // VLM 토글은 추론 루프를 건드리지 않고 VLM 서비스만 start/stop 한다.
+        // 추론 루프가 안 돌고 있으면 플래그만 바꾸고, 다음 StartInferenceLoop 에서 반영된다.
+        public void SetVlm(bool enabled)
+        {
+            if (_isVlmEnabled == enabled)
+            {
+                return;
+            }
+            _isVlmEnabled = enabled;
+            OnPropertyChanged(nameof(IsVlmEnabled));
+
+            if (enabled)
+            {
+                if (_inferenceTask != null)
+                {
+                    StartVlmService();
+                }
+            }
+            else
+            {
+                StopVlmService();
+                SceneDescription = string.Empty;
+                SceneDescribedAt = default;
+            }
+        }
+
         private void ToggleVideo()
         {
             SetVideo(!_isVideoEnabled);
@@ -632,6 +663,11 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void ToggleInference()
         {
             SetInference(!_isInferenceEnabled);
+        }
+
+        private void ToggleVlm()
+        {
+            SetVlm(!_isVlmEnabled);
         }
 
         private void StartAll()
@@ -790,8 +826,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         // [Step 7] VLM 묘사 파이프라인을 스트림당 1개 띄운다. 묘사/오류 콜백은 UI 스레드로 마샬링.
         private void StartVlmService()
         {
-            // 스트림당 사용 여부(_useVlm)가 꺼져 있으면 이 스트림은 VLM 서비스를 띄우지 않는다.
-            if (!_useVlm)
+            // 스트림당 사용 여부(IsVlmEnabled)가 꺼져 있으면 이 스트림은 VLM 서비스를 띄우지 않는다.
+            if (!_isVlmEnabled)
             {
                 return;
             }
@@ -1213,8 +1249,11 @@ namespace Vision.MultiStream.Inference.ViewModels
 
                         // [Step 7] 사람이 검출된 프레임만 VLM 으로 트리거(논블로킹, 게이트가 쿨다운 적용).
                         // frame.Dispose() 전이라 BgrPixels 가 유효하며, TryTrigger 가 즉시 스냅샷을 복사한다.
-                        // _vlmService 는 _useVlm 가 켜진 스트림에서만 생성되므로(StartVlmService), null 체크가 곧 사용 여부 게이트.
-                        if (_vlmService != null)
+                        // _vlmService 는 IsVlmEnabled 일 때만 생성되며, 💬 토글로 UI 스레드에서 언제든 null 이 될 수 있다.
+                        // 필드를 두 번 읽으면 그 사이에 null 이 되어 NRE 로 루프가 죽으므로 로컬로 한 번만 읽는다.
+                        // (Dispose 된 서비스에 TryTrigger 해도 채널이 닫혀 TryWrite=false → 버퍼 반납, 안전)
+                        VlmDescriptionService? vlm = _vlmService;
+                        if (vlm != null)
                         {
                             int personCount = 0;
                             foreach (Detection d in detections)
@@ -1226,7 +1265,7 @@ namespace Vision.MultiStream.Inference.ViewModels
                             }
                             if (personCount > 0)
                             {
-                                _vlmService.TryTrigger(frame.BgrPixels, frame.Width, frame.Height, personCount);
+                                vlm.TryTrigger(frame.BgrPixels, frame.Width, frame.Height, personCount);
                             }
                         }
                     }

@@ -132,19 +132,6 @@
                                               VerticalAlignment="Center"
                                               ToolTip="추가될 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
                                 </WrapPanel>
-                                <!-- VLM 묘사 행: 좁아지면 아래로 wrap -->
-                                <WrapPanel Margin="0,6,0,0">
-                                    <TextBlock Text="VLM 묘사:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <RadioButton Content="CPU" GroupName="VlmDevice" VerticalAlignment="Center" Margin="0,0,0,2"
-                                                 IsChecked="{Binding VlmUseCpu}"
-                                                 ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
-                                    <RadioButton Content="GPU" GroupName="VlmDevice" Margin="8,0,0,2" VerticalAlignment="Center"
-                                                 IsChecked="{Binding VlmUseGpu}"
-                                                 ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
-                                    <CheckBox Content="VLM 사용" IsChecked="{Binding NewUseVlm}" Margin="12,0,0,2"
-                                              VerticalAlignment="Center"
-                                              ToolTip="추가될 스트림에서 사람 검출 시 VLM 장면 묘사를 켜둘지 여부"/>
-                                </WrapPanel>
                                 <!-- 버튼 행: 좁아지면 아래로 wrap -->
                                 <WrapPanel Margin="0,6,0,0">
                                     <Button Content="+ 추가" Command="{Binding AddStreamCommand}" Width="80" Height="28" Margin="0,0,0,2"/>
@@ -170,6 +157,11 @@
                                 <StackPanel Orientation="Horizontal">
                                     <Button Content="🧠 ON" Command="{Binding StartAllInferenceCommand}" Width="80" Height="26"/>
                                     <Button Content="🧠 OFF" Command="{Binding StopAllInferenceCommand}" Width="80" Height="26" Margin="6,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="전체 VLM" Margin="0,6,0,2" FontSize="11" Foreground="#555"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="💬 ON" Command="{Binding StartAllVlmCommand}" Width="80" Height="26"/>
+                                    <Button Content="💬 OFF" Command="{Binding StopAllVlmCommand}" Width="80" Height="26" Margin="6,0,0,0"/>
                                 </StackPanel>
                                 <Button Content="▶ 전체 시작(영상+소리)" Command="{Binding StartAllCommand}" Height="26" Margin="0,6,0,0"
                                         HorizontalAlignment="Stretch"/>
@@ -235,6 +227,11 @@
                                                                   Content="🧠" Width="28" Height="22" FontSize="11" Padding="0"
                                                                   Margin="4,0,0,0"
                                                                   ToolTip="추론 ON/OFF"/>
+                                                    <ToggleButton IsChecked="{Binding IsVlmEnabled, Mode=OneWay}"
+                                                                  Command="{Binding ToggleVlmCommand}"
+                                                                  Content="💬" Width="28" Height="22" FontSize="11" Padding="0"
+                                                                  Margin="4,0,0,0"
+                                                                  ToolTip="VLM 장면 묘사 ON/OFF (추론이 켜져 있을 때 동작)"/>
                                                     <Button Content="▶" Command="{Binding StartCommand}"
                                                             Width="22" Height="22" FontSize="10" Padding="0" Margin="4,0,0,0"
                                                             ToolTip="이 스트림 시작(영상+소리)"/>
@@ -266,13 +263,20 @@
 
                 <!-- 우: 타일 그리드 -->
                 <DockPanel Grid.Column="2">
-                    <!-- 상단 툴바: 레이아웃 선택 -->
+                    <!-- 상단 툴바: 레이아웃 선택 + VLM 디바이스(앱 전역) -->
                     <Border DockPanel.Dock="Top" Background="#EEE" Padding="8,4" Margin="0,0,0,8">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="레이아웃:" VerticalAlignment="Center"/>
                             <ComboBox Width="120" Margin="6,0,0,0"
                                       ItemsSource="{Binding Source={StaticResource LayoutModes}}"
                                       SelectedItem="{Binding Layout}"/>
+                            <TextBlock Text="VLM 디바이스(전체):" VerticalAlignment="Center" Margin="20,0,6,0"/>
+                            <RadioButton Content="CPU" GroupName="VlmDevice" VerticalAlignment="Center"
+                                         IsChecked="{Binding VlmUseCpu}"
+                                         ToolTip="VLM 을 CPU 로 — GPU 는 YOLO/영상 전용, 대신 CPU 경합(느림). Ollama 우선순위 낮춤 적용"/>
+                            <RadioButton Content="GPU" GroupName="VlmDevice" Margin="8,0,0,0" VerticalAlignment="Center"
+                                         IsChecked="{Binding VlmUseGpu}"
+                                         ToolTip="VLM 을 GPU 로 — 빠르지만 영상과 GPU 를 경합(8GB 면 일부 CPU 스필)"/>
                         </StackPanel>
                     </Border>
 
@@ -348,6 +352,14 @@
                                                         Background="Transparent" Foreground="White" BorderThickness="0"
                                                         Margin="0,0,4,0"
                                                         ToolTip="이 스트림 시작(영상+소리)"/>
+                                                <!-- Dock=Right 는 먼저 선언한 요소가 더 오른쪽 → 화면 순서: 🎥 🔊 🧠 💬 ▶ ⏹ ✕ -->
+                                                <ToggleButton DockPanel.Dock="Right"
+                                                              IsChecked="{Binding IsVlmEnabled, Mode=OneWay}"
+                                                              Command="{Binding ToggleVlmCommand}"
+                                                              Content="💬" Width="28" Height="22" FontSize="11" Padding="0"
+                                                              Background="Transparent" Foreground="White" BorderThickness="0"
+                                                              Margin="0,0,4,0"
+                                                              ToolTip="VLM 장면 묘사 ON/OFF (추론이 켜져 있을 때 동작)"/>
                                                 <ToggleButton DockPanel.Dock="Right"
                                                               IsChecked="{Binding IsInferenceEnabled, Mode=OneWay}"
                                                               Command="{Binding ToggleInferenceCommand}"

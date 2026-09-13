@@ -26,7 +26,6 @@ namespace Vision.MultiStream.Inference.Views
 
         public InferenceDevice SelectedDevice { get; private set; } = InferenceDevice.Cpu;
         public bool SelectedInferenceEnabled { get; private set; } = true;
-        public bool SelectedVlmEnabled { get; private set; } = true;
         public StreamRenderMode SelectedRenderMode { get; private set; } = StreamRenderMode.CpuIndividual;
 
         // 컴포지터가 없으면(GPU 없음) 컴포지터 모드 라디오를 비활성화. AddBulk 가 ShowDialog 전에 설정.
@@ -75,7 +74,6 @@ namespace Vision.MultiStream.Inference.Views
             }
 
             SelectedInferenceEnabled = InferenceCheck.IsChecked == true;
-            SelectedVlmEnabled = VlmCheck.IsChecked == true;
 
             if (GpuCompositorRadio.IsChecked == true)
             {

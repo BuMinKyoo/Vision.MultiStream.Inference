@@ -36,7 +36,6 @@ namespace Vision.MultiStream.Inference.ViewModels
         private string _newRtspUrl = "rtsp://localhost:8554/cam1";
         private InferenceDevice _newDevice = InferenceDevice.Cpu;
         private bool _newUseInference = true;
-        private bool _newUseVlm = true;
         // 컴포지터가 없으면(GPU 없음) 기본값은 개별. AttachCompositor 시 컴포지터 모드로 올린다.
         private StreamRenderMode _newRenderMode = StreamRenderMode.CpuIndividual;
         private LayoutMode _layout = LayoutMode.Auto;
@@ -69,6 +68,8 @@ namespace Vision.MultiStream.Inference.ViewModels
             StopAllAudioCommand = new RelayCommand(() => SetAllAudio(false));
             StartAllInferenceCommand = new RelayCommand(() => SetAllInference(true));
             StopAllInferenceCommand = new RelayCommand(() => SetAllInference(false));
+            StartAllVlmCommand = new RelayCommand(() => SetAllVlm(true));
+            StopAllVlmCommand = new RelayCommand(() => SetAllVlm(false));
             StartAllCommand = new RelayCommand(StartAll);
             StopAllCommand = new RelayCommand(StopAll);
             RemoveAllCommand = new RelayCommand(RemoveAll);
@@ -178,6 +179,8 @@ namespace Vision.MultiStream.Inference.ViewModels
         public RelayCommand StopAllAudioCommand { get; }
         public RelayCommand StartAllInferenceCommand { get; }
         public RelayCommand StopAllInferenceCommand { get; }
+        public RelayCommand StartAllVlmCommand { get; }
+        public RelayCommand StopAllVlmCommand { get; }
         public RelayCommand StartAllCommand { get; }
         public RelayCommand StopAllCommand { get; }
         public RelayCommand RemoveAllCommand { get; }
@@ -335,21 +338,6 @@ namespace Vision.MultiStream.Inference.ViewModels
             }
         }
 
-        // 추가될 스트림에서 VLM 묘사 파이프라인을 켜둘지 여부(스트림당). '추론 사용' 과 동일 패턴.
-        public bool NewUseVlm
-        {
-            get => _newUseVlm;
-            set
-            {
-                if (_newUseVlm == value)
-                {
-                    return;
-                }
-                _newUseVlm = value;
-                OnPropertyChanged();
-            }
-        }
-
         // 표시/디코딩 모드 선택 라디오 3종. 컴포지터 두 모드는 IsCompositorAvailable 일 때만 켤 수 있다.
         public StreamRenderMode NewRenderMode
         {
@@ -405,7 +393,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         }
 
         // [Step 7] VLM 묘사 디바이스 전역 토글(GPU/CPU). Ollama 단일 모델 로드라 앱 공통.
-        // 라디오 버튼 2개(GPU/CPU)에 바인딩. 전환은 다음 VLM 호출부터 적용(모델 재로딩 ~1분 발생 가능).
+        // 상단 툴바 라디오 2개(GPU/CPU)에 바인딩. 전 스트림 공통, 다음 VLM 호출부터 적용(모델 재로딩 ~1분 발생 가능).
         public bool VlmUseGpu
         {
             get => OllamaVlmClient.UseGpu;
@@ -474,7 +462,7 @@ namespace Vision.MultiStream.Inference.ViewModels
         private void AddStream()
         {
             string name = string.IsNullOrWhiteSpace(NewName) ? $"cam{_autoCounter++}" : NewName.Trim();
-            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode, _newUseVlm);
+            var item = CreateStream(name, NewRtspUrl.Trim(), NewDevice, _newUseInference, _newRenderMode);
             Streams.Add(item);
             NewName = string.Empty;
             OnPropertyChanged(nameof(TotalCount));
@@ -496,7 +484,6 @@ namespace Vision.MultiStream.Inference.ViewModels
             InferenceDevice device = dialog.SelectedDevice;
             bool inferenceEnabled = dialog.SelectedInferenceEnabled;
             StreamRenderMode renderMode = dialog.SelectedRenderMode;
-            bool vlmEnabled = dialog.SelectedVlmEnabled;
             foreach (string url in dialog.GetUrls())
             {
                 string trimmed = url.Trim();
@@ -504,14 +491,15 @@ namespace Vision.MultiStream.Inference.ViewModels
                 {
                     continue;
                 }
-                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode, vlmEnabled));
+                Streams.Add(CreateStream($"cam{_autoCounter++}", trimmed, device, inferenceEnabled, renderMode));
             }
             OnPropertyChanged(nameof(TotalCount));
         }
 
-        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode, bool vlmEnabled)
+        // VLM 은 부하가 크므로 기본 OFF 로 추가하고, 필요한 스트림만 💬 토글(또는 전체 VLM ON)로 켠다.
+        private StreamItemViewModel CreateStream(string name, string url, InferenceDevice device, bool inferenceEnabled, StreamRenderMode renderMode)
         {
-            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode, vlmEnabled);
+            var item = new StreamItemViewModel(name, url, device, _detectorResolver, OnRemoveRequested, inferenceEnabled, renderMode, initialVlmEnabled: false);
             WireStream(item);
             return item;
         }
@@ -545,6 +533,14 @@ namespace Vision.MultiStream.Inference.ViewModels
             foreach (var s in Streams)
             {
                 s.SetInference(enabled);
+            }
+        }
+
+        private void SetAllVlm(bool enabled)
+        {
+            foreach (var s in Streams)
+            {
+                s.SetVlm(enabled);
             }
         }
 
