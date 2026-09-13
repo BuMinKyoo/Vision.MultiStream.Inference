@@ -44,15 +44,16 @@
                              VerticalAlignment="Center"/>
                 <CheckBox x:Name="InferenceCheck" Content="추론 사용" IsChecked="True"
                           Margin="16,0,0,0" VerticalAlignment="Center"
-                          ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>            </StackPanel>
+                          ToolTip="추가된 스트림에서 YOLO 추론 루프를 켜둘지 여부"/>
+            </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                 <TextBlock Text="표시:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <RadioButton x:Name="CpuIndividualRadio" Content="CPU+개별(D3D)" GroupName="RenderMode" IsChecked="True"
-                             VerticalAlignment="Center"
-                             ToolTip="SW 디코딩 + 스트림별 D3D9 셰이더로 표시"/>
-                <RadioButton x:Name="CpuIndividualBitmapRadio" Content="CPU+개별(비트맵)" GroupName="RenderMode" Margin="8,0,0,0"
+                <RadioButton x:Name="CpuIndividualBitmapRadio" Content="CPU+개별(비트맵)" GroupName="RenderMode"
                              VerticalAlignment="Center"
                              ToolTip="SW 디코딩 + WriteableBitmap 으로 CPU 그리기 (D3D 를 쓸 수 없는 PC 용)"/>
+                <RadioButton x:Name="CpuIndividualRadio" Content="CPU+개별(D3D)" GroupName="RenderMode" IsChecked="True" Margin="8,0,0,0"
+                             VerticalAlignment="Center"
+                             ToolTip="SW 디코딩 + 스트림별 D3D9 셰이더로 표시"/>
                 <RadioButton x:Name="CpuCompositorRadio" Content="CPU+컴포지터" GroupName="RenderMode" Margin="8,0,0,0"
                              VerticalAlignment="Center"
                              ToolTip="SW 디코딩 + 단일 컴포지터 표시"/>
